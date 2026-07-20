@@ -26,6 +26,22 @@ READ_ONLY_ACTIONS = {
 }
 
 
+def _use_utf8_stdout() -> None:
+    """Force UTF-8 on the streams, whatever the console's codepage is.
+
+    Windows defaults stdout to cp1252, which cannot encode the CJK and typographic
+    characters that are all over Eric's wiki, so any search whose hits contain them
+    died with UnicodeEncodeError before printing. The caller is a program reading
+    a pipe, not a terminal rendering glyphs, so UTF-8 is always the right answer
+    here; `errors="replace"` keeps a stray unencodable character from taking the
+    whole command down.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(encoding="utf-8", errors="replace")
+
+
 def _emit(payload: object) -> None:
     json.dump(payload, sys.stdout, indent=2, ensure_ascii=False)
     sys.stdout.write("\n")
@@ -56,6 +72,7 @@ def _deny_writes(action, *_args):
 
 
 def main(argv: list[str] | None = None) -> int:
+    _use_utf8_stdout()
     parser = argparse.ArgumentParser(prog="claude_memory")
     parser.add_argument("--db", default=None, help="path to the SQLite store")
     subparsers = parser.add_subparsers(dest="command", required=True)

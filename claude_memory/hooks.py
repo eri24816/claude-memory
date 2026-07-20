@@ -77,6 +77,15 @@ COMMANDS = {"session-start": session_start}
 
 
 def main(argv: list[str] | None = None) -> int:
+    # json.dump escapes non-ASCII by default, so this is belt-and-braces today.
+    # It matters because the failure mode here is silent: main() swallows every
+    # exception, so an encoding error would drop the whole memory block rather
+    # than announce itself.
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(encoding="utf-8", errors="replace")
+
     arguments = sys.argv[1:] if argv is None else argv
     if not arguments or arguments[0] not in COMMANDS:
         return 0
