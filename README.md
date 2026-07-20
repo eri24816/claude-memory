@@ -100,26 +100,31 @@ types. No priority function is needed.
 | Set | Rule |
 |---|---|
 | `meta` | all |
-| `conv-pref`, `code-pref` | all |
-| `fact` | `about_user` and not yet ended |
+| `conv-pref` | all |
+| `fact` | `about_user`, not yet ended, starting within `lead_time` |
 | `todo` | `about_user` and still open |
 | `idea`, `action`, `intention` | `about_user`, 3 most recent of each |
 
 ```sql
-   type IN ('meta', 'conv-pref', 'code-pref')
+   type IN ('meta', 'conv-pref')
 OR (about_user AND type = 'fact'
     AND NOT stale
-    AND (window_end IS NULL OR date('now') <= window_end))
+    AND (window_end IS NULL OR date('now') <= window_end)
+    AND (window_start IS NULL
+         OR window_start <= date('now', '+' || :lead_time)))
 OR (about_user AND type = 'todo'
     AND superseded_by IS NULL AND NOT stale)
 -- plus: 3 most recent each of idea / action / intention, about_user
 -- autoload set = global-T1 + project-T1 (current project only)
 ```
 
-The `fact` predicate checks only `window_end`, so a fact whose window *starts* in the
-future is in T1 from the moment it is recorded — the UMich enrolment is autoloaded today,
-weeks before 2026-08-05. This is deliberate, and it removes the need for a `lead_time`
-parameter.
+`code-pref` is **not** autoloaded — meta instead tells the agent to fetch code-pref nodes
+when it is about to write code, keeping coding conventions out of every non-coding
+session's budget.
+
+A fact enters T1 once its window starts within `lead_time` (30 days) and stays until the
+window ends. The UMich enrolment autoloads from 2026-07-06 onward; a fact starting in
+2028 does not.
 
 Every set here is self-limiting except **open todos**, which shrink only when closed. If
 T1 outgrows its budget, that is the category to cap first.
@@ -127,6 +132,57 @@ T1 outgrows its budget, that is the category to cap first.
 `scope` (`global | project:<name>`) is orthogonal to tier and fixes cross-project
 siloing. **When in doubt, `global`** — a wrongly project-scoped fact is invisible
 everywhere else and fails silently; a wrongly global one is merely noisy.
+
+## Workflow
+
+No user-facing CLI. The agent is the only caller; the user talks to the agent.
+
+### Writing
+
+| Trigger | Mechanism | Why |
+|---|---|---|
+| Every N turns | `Stop` hook injects a maintain-memory instruction | **The counter must live in the hook.** A model cannot reliably count turns, and a meta instruction alone loses to task load |
+| Before compaction | `PreCompact` hook | The one point where uncaptured context is lost permanently |
+| On request | user asks the agent to ingest a file or folder | Manual for now — **no auto-ingest** |
+
+Meta describes *how* to maintain memory; the hooks decide *when*. Both are needed: meta
+alone is model-discretion, hooks alone have no instructions to give.
+
+### Reading
+
+| Path | Trigger | Notes |
+|---|---|---|
+| **Autoload T1** | `SessionStart`, `PostCompact` | Compaction destroys the T1 block, so it must be re-injected |
+| **Per-message retrieval** | `UserPromptSubmit` | Query = user message (+ light recent context). Small K, with a **relevance floor** so trivial messages inject nothing |
+| **Active search** | agent decides | Documented in meta; the fallback for what auto-retrieval missed |
+
+Per-message retrieval matters most: the recurring failure is not that the agent cannot
+find a node, but that it does not know one exists to look for. Active search only fires
+when the agent already suspects something is there.
+
+### Agent-facing API
+
+A programmatic layer is **mandatory, not stylistic**: inserting a node requires computing
+an embedding, and search requires embedding the query — neither is expressible in SQL.
+
+| Function | Purpose |
+|---|---|
+| `remember(nodes)` | insert / supersede, batched |
+| `search(query, k, scope)` | hybrid RRF retrieval |
+| `assemble_t1(scope)` | the categorical T1 set |
+| `ingest(path)` | heading-split a file or folder |
+| `sql(query)` | **read-only** escape hatch for the long tail |
+
+Since the layer must exist anyway, it also enforces the invariants the agent would
+otherwise violate silently:
+
+- **Summaries are immutable** — no `UPDATE` on `summary`, only insert + supersede
+- Supersession writes both sides and appends revisions stamped with `capture_run_id`
+- Never supersede an `idea` or an umbrella `intention`
+- `about_user` required for `fact`/`action`/`todo`/`intention`, null for `meta`/prefs
+- `window_start <= window_end`; supersede target exists; no self or cyclic supersession
+- `origin = 'original'` nodes are protected from `reindex`
+- Writes keep `nodes_fts` and `nodes_vec` in sync with `nodes`
 
 ## Storage and durability
 
@@ -316,14 +372,16 @@ the `superseded_by` clause.
 | Parameter | Meaning | Default |
 |---|---|---|
 | `t1_budget` | autoload cap — a ceiling to alarm on, not a ranking input | 8,000 chars (~2k tokens) |
+| `lead_time` | how early a future-dated fact enters T1 | 30 days |
 | `recent_n` | per-type cap for idea / action / intention in T1 | 3 |
+| `maintain_every` | turns between `Stop`-hook maintenance prompts | 5 |
+| `retrieval_floor` | minimum RRF score for per-message injection | open |
 | `N_redundant` | redundant hits before abstraction fires | open |
 | `rrf_k` | RRF constant | 60 |
 | `candidate_k` | per-index over-fetch before fusion | 200 |
 
-`priority` and `lead_time` are gone: T1 selection is categorical rather than ranked, and
-the `fact` predicate already admits future-dated windows. `t1_budget` is now only a
-tripwire — if the categorical set exceeds it, cap open todos rather than introducing a
+`priority` is gone — T1 selection is categorical rather than ranked. `t1_budget` is only
+a tripwire: if the categorical set exceeds it, cap open todos rather than reintroducing a
 ranking function.
 
 **RRF replaces weight tuning.** BM25 scores and cosine distances are on incomparable
