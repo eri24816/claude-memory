@@ -196,6 +196,55 @@ def test_scope_isolation(connection):
     assert len(retrieval.assemble_t1(connection, scope="project:polygenie")) == 1
 
 
+def test_source_session_defaults_from_the_live_session(connection, monkeypatch):
+    """Regression: nothing ever set source_session automatically, so every
+    node in the store had it NULL -- the field existed but the agent had no
+    reason to type its own session id by hand on every write."""
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "live-session-abc")
+    written = store.remember(connection, [UMICH])["written"][0]
+    row = connection.execute(
+        "SELECT source_session FROM nodes WHERE id = ?", (written,)
+    ).fetchone()
+    assert row["source_session"] == "live-session-abc"
+
+
+def test_source_session_explicit_value_wins(connection, monkeypatch):
+    """A backfill or an ingest describing a different session's content must
+    not be overridden by whichever session happens to run the write."""
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "live-session-abc")
+    written = store.remember(
+        connection, [{**UMICH, "source_session": "original-session-xyz"}]
+    )["written"][0]
+    row = connection.execute(
+        "SELECT source_session FROM nodes WHERE id = ?", (written,)
+    ).fetchone()
+    assert row["source_session"] == "original-session-xyz"
+
+
+def test_source_session_not_defaulted_for_derived_nodes(connection, monkeypatch):
+    """A derived (ingested) node's provenance is the file it came from, not
+    whichever session happened to run the ingest command -- stamping one in
+    would misattribute wiki content to a conversation that never produced it."""
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "live-session-abc")
+    written = store.remember(connection, [{
+        "title": "Ingested wiki section", "summary": "Some wiki content.",
+        "type": "raw", "origin": "derived", "derived_from": "wiki/page.md",
+    }])["written"][0]
+    row = connection.execute(
+        "SELECT source_session FROM nodes WHERE id = ?", (written,)
+    ).fetchone()
+    assert row["source_session"] is None
+
+
+def test_source_session_null_without_the_env_var(connection, monkeypatch):
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+    written = store.remember(connection, [UMICH])["written"][0]
+    row = connection.execute(
+        "SELECT source_session FROM nodes WHERE id = ?", (written,)
+    ).fetchone()
+    assert row["source_session"] is None
+
+
 def test_edges_require_existing_target(connection):
     with pytest.raises(InvariantError, match="no such node"):
         store.remember(

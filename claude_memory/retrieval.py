@@ -249,7 +249,8 @@ def render_context(
 
 DIG_FIELDS = (
     "title", "type", "summary", "about_user", "scope",
-    "window_start", "window_end", "stale", "origin", "locator", "updated",
+    "window_start", "window_end", "stale", "origin", "locator",
+    "source_session", "updated",
 )
 
 
@@ -311,6 +312,8 @@ def render_dig(node: dict[str, Any] | None, title: str = "") -> str:
         lines.append(f"time: {_date_field(node)}")
     if node["locator"]:
         lines.append(f"source: {node['locator']}")
+    if node["source_session"]:
+        lines.append(f"session: {node['source_session']}")
     for field in ("superseded_by", "parent"):
         if node[field]:
             lines.append(f"{field}: {node[field]}")

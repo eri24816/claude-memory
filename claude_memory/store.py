@@ -7,6 +7,7 @@ node_revisions.
 
 from __future__ import annotations
 
+import os
 import sqlite3
 import uuid
 from typing import Any, Iterable
@@ -196,6 +197,20 @@ def _node_from_spec(connection: sqlite3.Connection, spec: dict[str, Any]) -> Nod
     }
     if fields.get("title"):
         fields["title"] = fields["title"].strip()
+    is_original = fields.get("origin", "original") == "original"
+    if is_original and fields.get("source_session") is None:
+        # Only for origin='original': a derived (ingested) node's provenance is
+        # the file it came from (derived_from/locator), not whichever session
+        # happened to run the ingest command -- stamping a session id there
+        # would be actively wrong, not just redundant.
+        #
+        # A default, not a hardcoded requirement: a backfill or an explicit
+        # spec describing a different session's content passes its own value,
+        # which wins. Without this, nothing ever set the field -- every node
+        # in the store had a NULL source_session until this fix, because the
+        # agent has no reason to type its own session id by hand on every
+        # write, and mostly didn't know it could.
+        fields["source_session"] = os.environ.get("CLAUDE_CODE_SESSION_ID")
     identifier = spec.get("id") or slugify(fields.get("title") or spec["summary"])
     return Node(id=_unique_id(connection, identifier), **fields)
 
