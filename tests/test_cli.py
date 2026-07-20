@@ -71,6 +71,61 @@ def test_search_survives_a_non_utf8_console(store, encoding):
     assert "Mixed script note" in result.stdout
 
 
+def run_hook(store, command, payload, encoding: str | None = None):
+    import os
+
+    merged = {**os.environ, "CLAUDE_MEMORY_DB": str(store)}
+    if encoding:
+        merged["PYTHONIOENCODING"] = encoding
+    else:
+        merged.pop("PYTHONIOENCODING", None)
+    return subprocess.run(
+        [sys.executable, "-m", "claude_memory.hooks", command],
+        input=json.dumps(payload), capture_output=True, text=True,
+        encoding="utf-8", errors="replace", env=merged,
+    )
+
+
+def context_of(result):
+    assert result.returncode == 0, result.stderr
+    if not result.stdout.strip():
+        return None
+    return json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"]
+
+
+def test_user_prompt_submit_injects_the_rendered_block(store):
+    """The per-message path, which was designed early and only wired much later:
+    every check until then exercised search directly, never the hook."""
+    context = context_of(run_hook(store, "user-prompt-submit", {
+        "prompt": "what does the mixed script note say about seed input",
+        "cwd": str(store.parent),
+    }))
+    assert context is not None, "expected an injection for a substantive prompt"
+    assert context.startswith("# memory that could be useful:")
+    assert "Mixed script note" in context
+
+
+@pytest.mark.parametrize("prompt", ["ok", "yes", "do it", ""])
+def test_user_prompt_submit_stays_silent_on_trivial_messages(store, prompt):
+    """Injecting three unrelated nodes into a message that needed none is worse
+    than injecting nothing, and this fires on every single message."""
+    result = run_hook(store, "user-prompt-submit", {"prompt": prompt,
+                                                    "cwd": str(store.parent)})
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == ""
+
+
+def test_hooks_survive_a_malformed_payload(store):
+    """A hook must never break a session, so it degrades to silence."""
+    result = subprocess.run(
+        [sys.executable, "-m", "claude_memory.hooks", "user-prompt-submit"],
+        input="not json at all", capture_output=True, text=True,
+        encoding="utf-8", errors="replace",
+    )
+    assert result.returncode == 0
+    assert result.stdout.strip() == ""
+
+
 def test_dig_reports_a_miss_without_crashing(store):
     result = run(store, "dig", "No such memory")
     assert result.returncode == 4

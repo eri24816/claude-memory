@@ -73,7 +73,54 @@ def session_start() -> int:
     return 0
 
 
-COMMANDS = {"session-start": session_start}
+def user_prompt_submit() -> int:
+    """Retrieve for the message the user just sent, and inject it alongside.
+
+    The gate matters more than the ranking here: this fires on every message,
+    including "ok" and "yes", and injecting three unrelated nodes into a message
+    that needed none is worse than injecting nothing.
+    """
+    payload = _read_payload()
+    prompt = (payload.get("prompt") or "").strip()
+    if not prompt:
+        return 0
+
+    from . import db, retrieval
+
+    if not retrieval.should_retrieve(prompt):
+        return 0
+
+    scope = scope_for_cwd(payload.get("cwd") or os.getcwd())
+    connection = db.connect()
+    try:
+        hits = retrieval.search_stratified(
+            connection, prompt, scope=scope,
+            exclude_ids=retrieval.t1_ids(connection, scope=scope),
+        )
+    finally:
+        connection.close()
+
+    block = retrieval.render_context(hits)
+    if not block:
+        return 0
+
+    json.dump(
+        {
+            "hookSpecificOutput": {
+                "hookEventName": "UserPromptSubmit",
+                "additionalContext": block,
+            }
+        },
+        sys.stdout,
+    )
+    sys.stdout.write("\n")
+    return 0
+
+
+COMMANDS = {
+    "session-start": session_start,
+    "user-prompt-submit": user_prompt_submit,
+}
 
 
 def main(argv: list[str] | None = None) -> int:
