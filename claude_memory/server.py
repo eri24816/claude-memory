@@ -221,10 +221,16 @@ def search(
     q: str,
     scope: str | None = None,
     limit: int = Query(default=10, le=50),
-) -> list[dict[str, Any]]:
+) -> dict[str, Any]:
     connection = _connection()
     try:
-        return retrieval.search(connection, q, limit=limit, scope=scope)
+        hits = retrieval.search(connection, q, limit=limit, scope=scope)
+        return {
+            "hits": hits,
+            "block": retrieval.render_context(
+                hits, heading=f"# Memory — search: {q}"
+            ),
+        }
     finally:
         connection.close()
 
@@ -243,7 +249,7 @@ def auto(message: str, scope: str | None = None) -> dict[str, Any]:
             "would_retrieve": True,
             "reason": "passed the content-word gate",
             "hits": hits,
-            "refine_hint": retrieval.refine_hint(hits),
+            "block": retrieval.render_context(hits),
         }
     finally:
         connection.close()

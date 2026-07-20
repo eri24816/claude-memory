@@ -173,8 +173,42 @@ def refine_hint(hits: list[dict[str, Any]]) -> str:
     is worth a model's attention exactly when a real question has pulled it up,
     and at that moment the agent has the question in hand to extract against.
     """
-    raw_ids = [hit["id"] for hit in hits if hit["type"] == "raw"]
-    return f"{REFINE_HINT} Raw hits: {', '.join(raw_ids)}." if raw_ids else ""
+    return REFINE_HINT if any(hit["type"] == "raw" for hit in hits) else ""
+
+
+# A raw chunk runs to MAX_SECTION_CHARS (1500), so three of them would inject
+# ~4.5k characters into every message. Retrieved text is a pointer, not the
+# document: the id travels with each hit, so an agent that wants the whole
+# section can fetch it deliberately instead of paying for it on every turn.
+HIT_CHARS = 400
+
+
+def render_context(
+    hits: list[dict[str, Any]], heading: str = "# Memory — retrieved for this message"
+) -> str:
+    """Render retrieved hits as the literal text an agent receives.
+
+    Ids are included because retrieval is also the refinement path: an agent that
+    reads a raw chunk needs its id to supersede it.
+    """
+    if not hits:
+        return ""
+
+    lines = [heading, ""]
+    for hit in hits:
+        summary = " ".join(hit["summary"].split())
+        if len(summary) > HIT_CHARS:
+            summary = summary[:HIT_CHARS].rstrip() + "… (truncated)"
+        window = ""
+        if hit.get("window_start") or hit.get("window_end"):
+            window = f" [{hit.get('window_start') or ''}..{hit.get('window_end') or ''}]"
+        title = f"**{hit['title']}** — " if hit.get("title") else ""
+        lines.append(f"- `{hit['type']}` {title}{summary}{window}  \n  `{hit['id']}`")
+
+    hint = refine_hint(hits)
+    if hint:
+        lines.extend(["", hint])
+    return "\n".join(lines)
 
 
 def should_retrieve(message: str, min_content_words: int = MIN_CONTENT_WORDS) -> bool:

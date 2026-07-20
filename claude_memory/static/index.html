@@ -86,6 +86,7 @@
   }
   .chip.fact, .chip.action, .chip.todo, .chip.intention { border-color: var(--hot); color: var(--hot); background: var(--hot-wash); }
   .chip.idea, .chip.meta, .chip["conv-pref"] { border-color: var(--cold); color: var(--cold); background: var(--cold-wash); }
+  .chip.raw { border-style: dashed; color: var(--ink-faint); }
   .chip.off { opacity: 0.55; }
 
   .flag { font-family: var(--mono); font-size: 0.68rem; color: var(--hot); }
@@ -104,6 +105,12 @@
     font-size: 0.8rem; color: var(--ink-soft); background: var(--cold-wash);
     border-left: 2px solid var(--cold); padding: 0.6rem 0.9rem; margin-bottom: 1rem;
   }
+  .blockhead {
+    font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.08em;
+    color: var(--ink-faint); font-weight: 600; margin: 1.25rem 0 0.5rem;
+  }
+  .blockhead:first-of-type { margin-top: 0; }
+  .blockhead .num { text-transform: none; letter-spacing: 0; margin-left: 0.5rem; }
   .verdict { font-weight: 650; }
   .verdict.no { color: var(--hot); }
   .empty { padding: 2rem; text-align: center; color: var(--ink-faint); font-size: 0.86rem; }
@@ -203,6 +210,9 @@
       <select id="auto-scope"><option value="">global only</option></select>
     </div>
     <p id="auto-verdict"></p>
+    <h2 class="blockhead">Injected text <span class="num muted" id="auto-chars"></span></h2>
+    <pre class="block" id="auto-block"></pre>
+    <h2 class="blockhead">Ranking detail</h2>
     <div class="scroll"><table>
       <thead><tr><th>Score</th><th>BM25</th><th>Vector</th><th>Type</th><th>Summary</th></tr></thead>
       <tbody id="auto-body"></tbody>
@@ -219,6 +229,9 @@
       <input class="wide" id="q-input" placeholder="search query…">
       <select id="q-scope"><option value="">global only</option></select>
     </div>
+    <h2 class="blockhead">Returned text <span class="num muted" id="q-chars"></span></h2>
+    <pre class="block" id="q-block"></pre>
+    <h2 class="blockhead">Ranking detail</h2>
     <div class="scroll"><table>
       <thead><tr><th>Score</th><th>BM25</th><th>Vector</th><th>Type</th><th>Summary</th></tr></thead>
       <tbody id="q-body"></tbody>
@@ -262,7 +275,7 @@ const get = async (path, params) => {
   return (await fetch(url)).json();
 };
 const graphColors = {
-  fact: "#e0873f", action: "#db5f57", todo: "#e0b13f", intention: "#b977d1",
+  raw: "#98a2ae", fact: "#e0873f", action: "#db5f57", todo: "#e0b13f", intention: "#b977d1",
   idea: "#65a7d8", meta: "#58b5a1", "conv-pref": "#7faad6", "code-pref": "#8d93dc",
 };
 let graphData = null;
@@ -342,18 +355,33 @@ async function loadT1() {
 
 async function loadAuto() {
   const message = $("auto-msg").value.trim();
-  if (!message) { $("auto-verdict").textContent = ""; $("auto-body").innerHTML = ""; return; }
+  if (!message) {
+    $("auto-verdict").textContent = ""; $("auto-body").innerHTML = "";
+    $("auto-block").textContent = ""; $("auto-chars").textContent = "";
+    return;
+  }
   const data = await get("/api/auto", { message, scope: $("auto-scope").value });
   $("auto-verdict").innerHTML = data.would_retrieve
     ? `<span class="verdict">Would inject</span> <span class="muted">— ${esc(data.reason)}</span>`
     : `<span class="verdict no">Would not inject</span> <span class="muted">— ${esc(data.reason)}</span>`;
+  showBlock("auto", data.block, "Nothing would be injected.");
   $("auto-body").innerHTML = hitRows(data.hits);
+}
+
+function showBlock(prefix, text, fallback) {
+  $(`${prefix}-block`).textContent = text || fallback;
+  $(`${prefix}-chars`).textContent = text ? `${text.length} chars` : "";
 }
 
 async function loadActive() {
   const query = $("q-input").value.trim();
-  if (!query) { $("q-body").innerHTML = ""; return; }
-  $("q-body").innerHTML = hitRows(await get("/api/search", { q: query, scope: $("q-scope").value }));
+  if (!query) {
+    $("q-body").innerHTML = ""; $("q-block").textContent = ""; $("q-chars").textContent = "";
+    return;
+  }
+  const data = await get("/api/search", { q: query, scope: $("q-scope").value });
+  showBlock("q", data.block, "No matches.");
+  $("q-body").innerHTML = hitRows(data.hits);
 }
 
 function renderGraph() {
