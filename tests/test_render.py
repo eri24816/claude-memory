@@ -83,6 +83,27 @@ def test_supersession_transfers_the_title_to_the_successor(connection):
     assert superseded["superseded_by"] == "Ann Arbor apartment"
 
 
+def test_write_operations_accept_titles(connection):
+    """Everything an agent is shown carries a title and never an id, so a handle
+    it hands back is a title. Requiring ids made supersede and stale unreachable
+    from the only surface that uses them."""
+    store.remember(connection, [
+        {"op": "supersede", "supersedes": "Move-in and key pickup",
+         "title": "Move-in and key pickup", "type": "action", "about_user": True,
+         "summary": "Eric moved into the apartment on 2026-08-05.",
+         "window_start": "2026-08-05"},
+    ])
+    assert retrieval.dig(connection, "Move-in and key pickup")["type"] == "action"
+
+    store.set_stale(connection, "Ann Arbor apartment")
+    assert retrieval.dig(connection, "Ann Arbor apartment")["stale"] is True
+
+
+def test_unknown_handle_is_reported_by_name(connection):
+    with pytest.raises(Exception, match="No such memory|no node titled"):
+        store.set_stale(connection, "No such memory")
+
+
 def test_dig_resolves_links_to_titles(connection):
     node = retrieval.dig(connection, "Move-in and key pickup")
     assert node["type"] == "todo"

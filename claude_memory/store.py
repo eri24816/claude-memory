@@ -73,6 +73,26 @@ def _retire_title(connection: sqlite3.Connection, node_id: str, title: str) -> N
     )
 
 
+def resolve(connection: sqlite3.Connection, handle: str) -> str:
+    """Resolve a title or an id to an id.
+
+    Everything an agent is shown carries a title and never an id, so any handle
+    it hands back is a title. Ids stay accepted because the ingest and the tests
+    hold them directly, but a title has to work or supersede and stale are
+    unreachable from the only surface that uses them.
+    """
+    row = connection.execute(
+        "SELECT id FROM nodes WHERE title = ?", (handle,)
+    ).fetchone()
+    if row is not None:
+        return row["id"]
+    if connection.execute(
+        "SELECT 1 FROM nodes WHERE id = ?", (handle,)
+    ).fetchone():
+        return handle
+    raise InvariantError(f"no node titled {handle!r}")
+
+
 def _next_revision(connection: sqlite3.Connection, node_id: str) -> int:
     row = connection.execute(
         "SELECT COALESCE(MAX(revision), 0) + 1 FROM node_revisions WHERE node_id = ?",
@@ -200,7 +220,9 @@ def remember(
                 target = spec.get("supersedes")
                 if not target:
                     raise InvariantError("op 'supersede' requires 'supersedes'")
-                node_id = _supersede(connection, target, node, capture_run_id)
+                node_id = _supersede(
+                    connection, resolve(connection, target), node, capture_run_id
+                )
             elif operation == "insert":
                 node_id = _insert(connection, node, capture_run_id)
             else:
@@ -210,13 +232,12 @@ def remember(
             pending_edges.extend((node_id, edge) for edge in node.edges)
 
         for source_id, edge in pending_edges:
-            destination = edge["dst"]
-            if not connection.execute(
-                "SELECT 1 FROM nodes WHERE id = ?", (destination,)
-            ).fetchone():
+            try:
+                destination = resolve(connection, edge["dst"])
+            except InvariantError:
                 raise InvariantError(
-                    f"edge {source_id} -{edge['rel']}-> {destination}: no such node"
-                )
+                    f"edge {source_id} -{edge['rel']}-> {edge['dst']}: no such node"
+                ) from None
             connection.execute(
                 "INSERT OR IGNORE INTO node_edges (src_id, dst_id, rel) "
                 "VALUES (?, ?, ?)",
@@ -231,13 +252,10 @@ def remember(
 
 
 def set_stale(
-    connection: sqlite3.Connection, node_id: str, capture_run_id: str | None = None
+    connection: sqlite3.Connection, handle: str, capture_run_id: str | None = None
 ) -> None:
     """Mark a node as no longer true, with the end date unknown."""
-    if not connection.execute(
-        "SELECT 1 FROM nodes WHERE id = ?", (node_id,)
-    ).fetchone():
-        raise InvariantError(f"no such node {node_id!r}")
+    node_id = resolve(connection, handle)
     connection.execute(
         "UPDATE nodes SET stale = 1, updated = ? WHERE id = ?", (now(), node_id)
     )

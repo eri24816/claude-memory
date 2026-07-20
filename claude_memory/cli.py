@@ -37,7 +37,11 @@ def _read_specs(inline: str | None, path: str | None) -> list[dict]:
     Prefer --file on Windows: PowerShell mangles payloads piped to stdin.
     """
     if path:
-        raw = Path(path).read_text(encoding="utf-8")
+        # utf-8-sig, not utf-8: PowerShell's `Out-File -Encoding utf8` writes a
+        # BOM, and --file is the documented path on Windows precisely because
+        # piping is unreliable there. Plain utf-8 rejects the BOM outright, so
+        # the natural way to produce the file would break every write.
+        raw = Path(path).read_text(encoding="utf-8-sig")
     elif inline:
         raw = inline
     else:
@@ -84,7 +88,7 @@ def main(argv: list[str] | None = None) -> int:
     t1_parser.add_argument("--render", action="store_true", help="markdown, not JSON")
 
     stale_parser = subparsers.add_parser("stale", help="mark a node no longer true")
-    stale_parser.add_argument("node_id")
+    stale_parser.add_argument("title", help="node title (an id also works)")
 
     rollback_parser = subparsers.add_parser("rollback", help="undo a capture run")
     rollback_parser.add_argument("capture_run_id")
@@ -142,8 +146,8 @@ def main(argv: list[str] | None = None) -> int:
                 _emit(nodes)
 
         elif args.command == "stale":
-            store.set_stale(connection, args.node_id)
-            _emit({"stale": args.node_id})
+            store.set_stale(connection, args.title)
+            _emit({"stale": args.title})
 
         elif args.command == "rollback":
             _emit(store.rollback_run(connection, args.capture_run_id))
