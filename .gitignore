@@ -1,0 +1,16 @@
+# The SQLite store is precious but not diffable — back it up with VACUUM INTO,
+# never commit it. See README "Storage and durability".
+*.db
+*.db-wal
+*.db-shm
+snapshots/
+
+# Embedding model cache
+.fastembed_cache/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
