@@ -87,6 +87,35 @@ def test_stratified_guarantees_personal_slots(connection):
     assert any(hit["about_user"] for hit in stratified)
 
 
+def test_autoloaded_nodes_are_excluded_from_retrieval(connection):
+    """Retrieval spends a budget the autoload set has already spent. A node that
+    is verbatim in context costs a slot and reads as a second source agreeing."""
+    autoloaded = retrieval.t1_ids(connection)
+    assert autoloaded, "precondition: something is autoloaded"
+
+    query = "when do I move into the apartment"
+    assert any(hit["id"] in autoloaded for hit in retrieval.search(connection, query))
+
+    hits = retrieval.search(connection, query, exclude_ids=autoloaded)
+    assert not any(hit["id"] in autoloaded for hit in hits)
+
+
+def test_exclusion_does_not_shrink_the_result_set(connection):
+    """Regression risk: filtering after LIMIT would let excluded rows consume
+    slots, silently returning fewer hits than asked for."""
+    filler = [
+        {"summary": f"Note number {index} about apartments and moving house.",
+         "type": "fact", "about_user": False, "window_start": "2026-01-01"}
+        for index in range(10)
+    ]
+    store.remember(connection, filler)
+
+    excluded = retrieval.t1_ids(connection)
+    hits = retrieval.search(connection, "apartment moving", limit=5,
+                            exclude_ids=excluded)
+    assert len(hits) == 5
+
+
 @pytest.mark.parametrize("message", ["ok", "yes", "do it", "no thanks"])
 def test_trivial_messages_do_not_trigger_retrieval(message):
     assert retrieval.should_retrieve(message) is False

@@ -63,6 +63,7 @@ def search(
     include_superseded: bool = False,
     parent: str | None = None,
     about_user: bool | None = None,
+    exclude_ids: set[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Hybrid retrieval fused by Reciprocal Rank Fusion.
 
@@ -89,6 +90,15 @@ def search(
         about_clause = "AND n.about_user = 1"
     elif about_user is False:
         about_clause = "AND COALESCE(n.about_user, 0) = 0"
+
+    # Excluded in SQL rather than filtered afterwards: dropping rows after LIMIT
+    # would let already-loaded nodes consume result slots and silently shrink
+    # what comes back.
+    exclude_clause = ""
+    exclude_params: tuple[Any, ...] = ()
+    if exclude_ids:
+        exclude_params = tuple(exclude_ids)
+        exclude_clause = f"AND n.id NOT IN ({', '.join('?' * len(exclude_params))})"
 
     query_vector = embed.serialize(embed.encode_one(query))
 
@@ -121,6 +131,7 @@ def search(
           AND {parent_clause}
           {superseded_clause}
           {about_clause}
+          {exclude_clause}
         ORDER BY score DESC
         LIMIT ?
     """
@@ -129,9 +140,19 @@ def search(
         sql,
         (match_expression, CANDIDATE_K, query_vector, CANDIDATE_K,
          RAW_DEMOTION, RRF_K, RRF_K,
-         *scopes, *parent_params, limit),
+         *scopes, *parent_params, *exclude_params, limit),
     ).fetchall()
     return [dict(row) for row in rows]
+
+
+def t1_ids(connection: sqlite3.Connection, scope: str | None = None) -> set[str]:
+    """Node ids already autoloaded, and so not worth retrieving again.
+
+    Retrieval competes for a budget the autoload set has already spent. Returning
+    a node that is verbatim in context costs slots and reads as corroboration —
+    two independent sources agreeing — when it is one source counted twice.
+    """
+    return {node["id"] for node in assemble_t1(connection, scope=scope)}
 
 
 def search_stratified(
@@ -140,6 +161,7 @@ def search_stratified(
     personal_limit: int = 3,
     world_limit: int = 3,
     scope: str | None = None,
+    exclude_ids: set[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Retrieve personal and world nodes as separate populations.
 
@@ -150,9 +172,9 @@ def search_stratified(
     so they get guaranteed slots rather than competing on raw score.
     """
     personal = search(connection, query, limit=personal_limit, scope=scope,
-                      about_user=True)
+                      about_user=True, exclude_ids=exclude_ids)
     world = search(connection, query, limit=world_limit, scope=scope,
-                   about_user=False)
+                   about_user=False, exclude_ids=exclude_ids)
     return sorted([*personal, *world], key=lambda hit: hit["score"], reverse=True)
 
 

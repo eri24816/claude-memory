@@ -180,6 +180,20 @@ Per-message retrieval matters most: the recurring failure is not that the agent 
 find a node, but that it does not know one exists to look for. Active search only fires
 when the agent already suspects something is there.
 
+**Both search paths exclude what T1 already loaded.** Retrieval competes for a budget the
+autoload set has already spent, and a node returned verbatim into context it is already in
+costs a slot twice over — worse, it reads as two independent sources agreeing when it is
+one source counted twice. The exclusion happens in SQL, before `LIMIT`, or the dropped
+rows would consume result slots and silently shrink the result set.
+
+T1 **replaces the global `CLAUDE.md`**, which is retired (archived at
+`archive/global-CLAUDE.md.retired`). Its rules were migrated to nodes first: coding
+conventions to `code-pref`, tool and formatting habits to `conv-pref`, and its
+memory-maintenance rules folded into the `meta` node, since they described routing into
+the very file being retired. The behavioural change is real — `code-pref` is not
+autoloaded, so those conventions now depend on the agent searching for them, which `meta`
+instructs it to do before writing code.
+
 ### Agent-facing API
 
 A programmatic layer is **mandatory, not stylistic**: inserting a node requires computing
