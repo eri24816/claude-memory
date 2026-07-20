@@ -17,6 +17,34 @@ from typing import Any
 
 SCOPE_PREFIX = "project:"
 
+# Matches README.md's `maintain_every`. A model cannot reliably count its own
+# turns, and a meta instruction to "capture actively" alone loses to task load
+# over a long conversation -- so the count lives here, forced by the hook,
+# rather than delegated to self-reporting.
+MAINTAIN_EVERY = 5
+
+# A single holistic question ("is anything worth capturing?") anchors on
+# whatever is most salient -- usually "has a decision been reached" -- and
+# silently drops everything else competing for attention. A checklist forces
+# each category to be considered on its own rather than folded into one
+# judgment call; that gap is exactly what let three sourced facts and two
+# capture-worthy user actions pass a real "nothing new qualifies" check.
+MAINTENANCE_REMINDER = (
+    "This is turn {count} since this session started. Before continuing, "
+    "check each of these separately -- do not let 'no decision yet' answer "
+    "for all of them:\n"
+    "1. A correction, stated preference, or change in Eric's situation.\n"
+    "2. A fact or finding you established through research or verification, "
+    "even with no decision reached -- a finding does not need a decision to "
+    "be worth saving.\n"
+    "3. A decision Eric actually made, with the reason it won.\n"
+    "4. A request from Eric that triggered real work (research, comparison, "
+    "verification) -- worth an action node of its own, separate from what "
+    "the work produced.\n"
+    "If any of the four clears the bar, load the memory skill and write it "
+    "now. If none do, say so in one line and continue."
+)
+
 
 def scope_for_cwd(cwd: str | None) -> str:
     """Derive a stable project scope from a working directory.
@@ -79,6 +107,40 @@ def build_user_prompt_context(payload: dict, connection: sqlite3.Connection) -> 
         exclude_ids=retrieval.t1_ids(connection, scope=scope),
     )
     return retrieval.render_context(hits)
+
+
+def _bump_stop_count(connection: sqlite3.Connection, session_id: str) -> int:
+    from .models import now
+
+    connection.execute(
+        "INSERT INTO hook_state (session_id, stop_count, updated) VALUES (?, 1, ?) "
+        "ON CONFLICT(session_id) DO UPDATE SET "
+        "stop_count = stop_count + 1, updated = excluded.updated",
+        (session_id, now()),
+    )
+    connection.commit()
+    row = connection.execute(
+        "SELECT stop_count FROM hook_state WHERE session_id = ?", (session_id,)
+    ).fetchone()
+    return row["stop_count"]
+
+
+def build_stop_context(payload: dict, connection: sqlite3.Connection) -> str:
+    """Every MAINTAIN_EVERY stops, remind the agent to check what is worth
+    capturing from the stretch of conversation since the last check.
+
+    Stays silent otherwise -- Stop's additionalContext forces the turn to
+    continue even without decision:block, so emitting it on every stop would
+    mean the conversation could never end.
+    """
+    session_id = payload.get("session_id")
+    if not session_id:
+        return ""
+
+    count = _bump_stop_count(connection, session_id)
+    if count % MAINTAIN_EVERY != 0:
+        return ""
+    return MAINTENANCE_REMINDER.format(count=count)
 
 
 def _emit(event_name: str, block: str) -> None:
@@ -151,9 +213,27 @@ def user_prompt_submit() -> int:
     return 0
 
 
+def stop() -> int:
+    """Force the every-N-turns memory check the meta node cannot rely on."""
+    payload = _read_payload()
+
+    from . import db
+
+    connection = db.connect()
+    try:
+        block = build_stop_context(payload, connection)
+    finally:
+        connection.close()
+
+    if block:
+        _emit("Stop", block)
+    return 0
+
+
 COMMANDS = {
     "session-start": session_start,
     "user-prompt-submit": user_prompt_submit,
+    "stop": stop,
 }
 
 

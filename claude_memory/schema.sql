@@ -75,3 +75,13 @@ CREATE VIRTUAL TABLE IF NOT EXISTS nodes_fts USING fts5(
 CREATE VIRTUAL TABLE IF NOT EXISTS nodes_vec USING vec0(
     embedding float[384]
 );
+
+-- Per-session Stop-hook turn counter. Lives in SQLite rather than a JSON file
+-- so concurrent sessions get atomic increments for free instead of a hand-
+-- rolled read-modify-write race; not a "node" -- it is agent-invisible state,
+-- never searched or rendered.
+CREATE TABLE IF NOT EXISTS hook_state (
+    session_id  TEXT PRIMARY KEY,
+    stop_count  INTEGER NOT NULL DEFAULT 0,
+    updated     TEXT NOT NULL
+);
