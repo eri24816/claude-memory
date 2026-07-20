@@ -40,16 +40,23 @@ July 2026" stays true forever; whether it is still *current* is what `stale` and
 ### The commitment ladder
 
 ```
-idea  →  intention  →  todo  →  action
+idea  ──motivates──▶  intention  ──motivates──▶  todo  ──superseded_by──▶  action
 ```
 
-Each promotion is a `supersede`, so the chain is history, not mutation. An `idea` is a
-proposition; an `intention` is a prospective action someone *may* take; a `todo` is one
-they have *decided on* or that is *necessary*; an `action` is one that happened.
+An `idea` is a proposition; an `intention` is a prospective action someone *may* take; a
+`todo` is one they have *decided on* or that is *necessary*; an `action` is one that
+happened.
 
-**Only `todo` reaches T1.** Deciding is what earns the context budget — which is exactly
-what the intention → todo promotion means. Open todos are
-`superseded_by IS NULL AND NOT stale`; abandoned ones are `stale`.
+**Only the last rung is supersession.** Completing a `todo` closes it, so the `action`
+supersedes it. The earlier rungs are **motivation**, not replacement — one idea can spawn
+many intentions, actions, and projects, and it stays a valid idea throughout. Superseding
+it would delete it from retrieval, since queries filter `superseded_by IS NULL`.
+
+An `intention` goes `stale` when the user says they no longer intend it, or when
+everything it motivated is done.
+
+**Only `todo` reaches T1.** Deciding is what earns the context budget. Open todos are
+`superseded_by IS NULL AND NOT stale`.
 
 Disambiguation: if it names an action someone may take → `intention`. If it is a concept
 or proposal → `idea`.
@@ -227,6 +234,17 @@ CREATE TABLE node_revisions (
 );
 
 CREATE INDEX node_revisions_run ON node_revisions(capture_run_id);
+
+-- 1:1 relations stay as columns above (superseded_by, parent, derived_from) because
+-- they sit on the hot retrieval filters. Everything 1:many or many:many lives here.
+CREATE TABLE node_edges (
+    src_id  TEXT NOT NULL REFERENCES nodes(id),
+    dst_id  TEXT NOT NULL REFERENCES nodes(id),
+    rel     TEXT NOT NULL,                  -- motivates | relates
+    PRIMARY KEY (src_id, dst_id, rel)
+);
+
+CREATE INDEX node_edges_dst ON node_edges(dst_id, rel);
 
 -- unicode61, not porter: stemming hurts exact identifier matching, and this
 -- corpus is dense with code identifiers and proper nouns.

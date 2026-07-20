@@ -50,9 +50,19 @@ lease and a single move-in day are two nodes, because one node carries one windo
 A `fact` asserts truth *from* `window_start`, **not** present truth — state it as it was
 true then, and never withhold a fact because it might have changed since.
 
-**The commitment ladder:** `idea → intention → todo → action`. Each promotion is a
-`supersede`. If it names an action someone may take → `intention`; if it is a concept or
-proposal → `idea`. Decided or necessary → `todo`. Already happened → `action`.
+**The commitment ladder:**
+
+```
+idea  ──motivates──▶  intention  ──motivates──▶  todo  ──supersedes──▶  action
+```
+
+If it names an action someone may take → `intention`; if it is a concept or proposal →
+`idea`. Decided or necessary → `todo`. Already happened → `action`.
+
+**Only completion supersedes.** An `action` that finishes a `todo` supersedes it. The
+earlier rungs are `motivates` **edges** — an idea stays valid no matter how much work it
+spawns, so never supersede an idea or an umbrella intention. Set `stale` on an intention
+only when the user says they no longer intend it.
 
 **`about_user`** (`fact`, `action`, `todo`, `intention`) — *is this inside the user's
 personal sphere?* Not grammatical subject. "My roommate moved in" → `true`. "Fizz
@@ -109,7 +119,8 @@ JSON array; `[]` if nothing qualifies.
     "scope": "global" | "project:<name>",
     "window_start": "YYYY-MM-DD" | null,
     "window_end": "YYYY-MM-DD" | null,
-    "links": []
+    "stale": false,
+    "edges": [{ "rel": "motivates" | "relates", "dst": "<node id>" }]
   }
 ]
 ```
