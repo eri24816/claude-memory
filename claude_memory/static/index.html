@@ -227,6 +227,7 @@
     </div>
     <div class="controls">
       <input class="wide" id="q-input" placeholder="search query…">
+      <select id="q-type"><option value="">all types</option></select>
       <select id="q-scope"><option value="">global only</option></select>
     </div>
     <h2 class="blockhead">Returned text <span class="num muted" id="q-chars"></span></h2>
@@ -313,7 +314,9 @@ async function loadStats() {
     <span><b>${data.stale}</b> stale</span>
     <span><b>${data.superseded}</b> superseded</span>`;
   for (const type of Object.keys(data.by_type)) {
-    $("f-type").insertAdjacentHTML("beforeend", `<option>${esc(type)}</option>`);
+    const option = `<option>${esc(type)}</option>`;
+    $("f-type").insertAdjacentHTML("beforeend", option);
+    $("q-type").insertAdjacentHTML("beforeend", option);
   }
   for (const scope of data.scopes) {
     const option = `<option value="${esc(scope)}">${esc(scope)}</option>`;
@@ -379,7 +382,9 @@ async function loadActive() {
     $("q-body").innerHTML = ""; $("q-block").textContent = ""; $("q-chars").textContent = "";
     return;
   }
-  const data = await get("/api/search", { q: query, scope: $("q-scope").value });
+  const data = await get("/api/search", {
+    q: query, scope: $("q-scope").value, type: $("q-type").value,
+  });
   showBlock("q", data.block, "No matches.");
   $("q-body").innerHTML = hitRows(data.hits);
 }
@@ -456,7 +461,7 @@ $("t1-scope").addEventListener("change", loadT1);
 $("auto-msg").addEventListener("input", debounce(loadAuto, 300));
 $("auto-scope").addEventListener("change", loadAuto);
 $("q-input").addEventListener("input", debounce(loadActive, 300));
-$("q-scope").addEventListener("change", loadActive);
+["q-scope", "q-type"].forEach((id) => $(id).addEventListener("change", loadActive));
 $("graph-scope").addEventListener("change", loadGraph);
 ["graph-type", "graph-about"].forEach((id) => $(id).addEventListener("change", renderGraph));
 $("graph-q").addEventListener("input", debounce(renderGraph));

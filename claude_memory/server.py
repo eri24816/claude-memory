@@ -220,12 +220,13 @@ def t1(scope: str | None = None) -> dict[str, Any]:
 def search(
     q: str,
     scope: str | None = None,
+    type: str | None = None,
     limit: int = Query(default=10, le=50),
 ) -> dict[str, Any]:
     connection = _connection()
     try:
         hits = retrieval.search(
-            connection, q, limit=limit, scope=scope,
+            connection, q, limit=limit, scope=scope, node_type=type,
             exclude_ids=retrieval.t1_ids(connection, scope=scope),
         )
         return {
