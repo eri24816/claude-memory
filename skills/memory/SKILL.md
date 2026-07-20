@@ -85,3 +85,13 @@ you actually read and used — leaving the rest raw is correct, not a backlog.
 `--type <type>` restrict to one kind · `--limit N` (default 10) ·
 `--scope project:<name>` include a project's nodes alongside global ·
 `--json` raw rows with BM25 and vector ranks, for debugging retrieval itself.
+
+## The background daemon
+
+Per-message retrieval runs the embedding model on every substantive message.
+A background process (`python -m claude_memory daemon start`) keeps that model
+warm so only the first message of a cold machine pays the load; `SessionStart`
+already triggers this automatically, so you should not normally need to touch
+it. `daemon status` / `daemon stop` exist for when retrieval feels slow or you
+want to confirm it is running — you do not need this for ordinary reads or
+writes, which work with or without it.

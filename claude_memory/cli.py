@@ -121,6 +121,11 @@ def main(argv: list[str] | None = None) -> int:
     snapshot_parser = subparsers.add_parser("snapshot", help="consistent backup")
     snapshot_parser.add_argument("destination")
 
+    daemon_parser = subparsers.add_parser(
+        "daemon", help="the background process that keeps the embedding model warm"
+    )
+    daemon_parser.add_argument("action", choices=["start", "stop", "status"])
+
     args = parser.parse_args(argv)
     connection = db.connect(args.db)
 
@@ -186,6 +191,22 @@ def main(argv: list[str] | None = None) -> int:
 
         elif args.command == "snapshot":
             _emit({"snapshot": str(db.snapshot(connection, args.destination))})
+
+        elif args.command == "daemon":
+            from . import daemon as daemon_module
+
+            connection.close()  # this command never touches the store
+            if args.action == "start":
+                already = daemon_module.discover_running() is not None
+                daemon_module.ensure_running()
+                _emit({"daemon": "already running" if already else "starting"})
+            elif args.action == "stop":
+                pid = daemon_module.stop()
+                _emit({"daemon": f"stopped pid {pid}" if pid else "not running"})
+            else:
+                port = daemon_module.discover_running()
+                _emit({"daemon": f"running on port {port}" if port else "not running"})
+            return 0
 
     except InvariantError as error:
         _emit({"error": "invariant", "detail": str(error)})

@@ -180,6 +180,14 @@ Per-message retrieval matters most: the recurring failure is not that the agent 
 find a node, but that it does not know one exists to look for. Active search only fires
 when the agent already suspects something is there.
 
+Both hooks call into a background daemon (`claude_memory.daemon`) that keeps fastembed's
+ONNX model warm across a whole session instead of cold-starting it — about 1.2s — in a
+fresh process on every message. `SessionStart` fires `ensure_running()` fire-and-forget, so
+warmup happens while Eric is still reading the autoloaded block; `UserPromptSubmit` tries
+the daemon first and falls back to computing in-process if nothing answers yet, so a
+message is never dropped just because the daemon has not come up. The daemon persists
+deliberately, with no idle timeout — `python -m claude_memory daemon status` / `stop`.
+
 **Titles are the agent-facing handle.** They are required and unique, and retrieval prints
 one per hit, so an agent that wants a node in full digs by the title it was just shown —
 getting the untruncated summary, the time window, staleness, and every link resolved to a
