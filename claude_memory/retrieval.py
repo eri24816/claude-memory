@@ -18,6 +18,12 @@ FINAL_K = 10
 # that dominates on both halves can still outrank a weak refined one.
 RAW_DEMOTION = 0.6
 
+# Sections of one document are near-identical in embedding space, so a matching
+# page sweeps the top slots and buries every other source. Capping per source
+# document costs a little depth on the best match and buys breadth across the
+# corpus, which is what a memory lookup is for.
+MAX_PER_SOURCE = 2
+
 LEAD_TIME_DAYS = 30
 RECENT_N = 3
 
@@ -64,6 +70,8 @@ def search(
     parent: str | None = None,
     about_user: bool | None = None,
     exclude_ids: set[str] | None = None,
+    node_type: str | None = None,
+    max_per_source: int = MAX_PER_SOURCE,
 ) -> list[dict[str, Any]]:
     """Hybrid retrieval fused by Reciprocal Rank Fusion.
 
@@ -100,6 +108,12 @@ def search(
         exclude_params = tuple(exclude_ids)
         exclude_clause = f"AND n.id NOT IN ({', '.join('?' * len(exclude_params))})"
 
+    type_clause = ""
+    type_params: tuple[Any, ...] = ()
+    if node_type:
+        type_clause = "AND n.type = ?"
+        type_params = (node_type,)
+
     query_vector = embed.serialize(embed.encode_one(query))
 
     sql = f"""
@@ -115,23 +129,37 @@ def search(
                    ROW_NUMBER() OVER (ORDER BY distance) AS rank
             FROM nodes_vec
             WHERE embedding MATCH ? AND k = ?
+        ),
+        ranked AS (
+            SELECT n.id, n.title, n.summary, n.type, n.scope, n.about_user,
+                   n.window_start, n.window_end, n.stale,
+                   lexical.rank  AS lexical_rank,
+                   semantic.rank AS semantic_rank,
+                   (CASE WHEN n.type = 'raw' THEN ? ELSE 1.0 END)
+                 * (COALESCE(1.0 / (? + lexical.rank), 0)
+                  + COALESCE(1.0 / (? + semantic.rank), 0)) AS score,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY COALESCE(n.derived_from, n.id)
+                       ORDER BY (CASE WHEN n.type = 'raw' THEN ? ELSE 1.0 END)
+                              * (COALESCE(1.0 / (? + lexical.rank), 0)
+                               + COALESCE(1.0 / (? + semantic.rank), 0)) DESC
+                   ) AS source_position
+            FROM nodes n
+            LEFT JOIN lexical  ON lexical.node_rowid  = n.rowid
+            LEFT JOIN semantic ON semantic.node_rowid = n.rowid
+            WHERE (lexical.rank IS NOT NULL OR semantic.rank IS NOT NULL)
+              AND n.scope IN ({scope_placeholders})
+              AND {parent_clause}
+              {superseded_clause}
+              {about_clause}
+              {exclude_clause}
+              {type_clause}
         )
-        SELECT n.id, n.title, n.summary, n.type, n.scope, n.about_user,
-               n.window_start, n.window_end, n.stale,
-               lexical.rank  AS lexical_rank,
-               semantic.rank AS semantic_rank,
-               (CASE WHEN n.type = 'raw' THEN ? ELSE 1.0 END)
-             * (COALESCE(1.0 / (? + lexical.rank), 0)
-              + COALESCE(1.0 / (? + semantic.rank), 0)) AS score
-        FROM nodes n
-        LEFT JOIN lexical  ON lexical.node_rowid  = n.rowid
-        LEFT JOIN semantic ON semantic.node_rowid = n.rowid
-        WHERE (lexical.rank IS NOT NULL OR semantic.rank IS NOT NULL)
-          AND n.scope IN ({scope_placeholders})
-          AND {parent_clause}
-          {superseded_clause}
-          {about_clause}
-          {exclude_clause}
+        SELECT id, title, summary, type, scope, about_user,
+               window_start, window_end, stale,
+               lexical_rank, semantic_rank, score
+        FROM ranked
+        WHERE source_position <= ?
         ORDER BY score DESC
         LIMIT ?
     """
@@ -139,8 +167,9 @@ def search(
     rows = connection.execute(
         sql,
         (match_expression, CANDIDATE_K, query_vector, CANDIDATE_K,
-         RAW_DEMOTION, RRF_K, RRF_K,
-         *scopes, *parent_params, *exclude_params, limit),
+         RAW_DEMOTION, RRF_K, RRF_K, RAW_DEMOTION, RRF_K, RRF_K,
+         *scopes, *parent_params, *exclude_params, *type_params,
+         max_per_source, limit),
     ).fetchall()
     return [dict(row) for row in rows]
 

@@ -53,6 +53,24 @@ def test_raw_still_reachable_by_search(workspace):
     assert any(hit["type"] == "raw" for hit in hits)
 
 
+def test_one_document_cannot_sweep_the_results(workspace):
+    """Sections of a page are near-identical in embedding space, so a matching
+    document takes every slot and buries every other source."""
+    connection, page = workspace
+    ingest.ingest_path(connection, page)
+    other = page.with_name("beans.md")
+    other.write_text(
+        "# Beans\n\n## Freshness\n\nBeans degas for about two weeks after "
+        "roasting, and espresso pulled inside day three tends to gush.\n",
+        encoding="utf-8",
+    )
+    ingest.ingest_path(connection, other)
+
+    hits = retrieval.search(connection, "espresso extraction and grind", limit=6)
+    sources = [hit["title"].split(" > ")[0] for hit in hits]
+    assert sources.count("espresso") <= retrieval.MAX_PER_SOURCE
+
+
 def test_refined_node_outranks_the_raw_chunk(workspace):
     connection, page = workspace
     ingest.ingest_path(connection, page)

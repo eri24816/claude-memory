@@ -1,9 +1,10 @@
 """Agent-facing entry point. There is deliberately no user-facing CLI:
 the user talks to the agent, and the agent calls this.
 
-    python -m claude_memory t1 --scope project:polygenie --render
     python -m claude_memory search "michigan housing"
-    echo '[{...}]' | python -m claude_memory remember
+    python -m claude_memory dig "Ann Arbor apartment"
+    python -m claude_memory t1 --scope project:polygenie --render
+    python -m claude_memory remember --file nodes.json
 """
 
 from __future__ import annotations
@@ -67,6 +68,16 @@ def main(argv: list[str] | None = None) -> int:
     search_parser.add_argument("--scope", default=None)
     search_parser.add_argument("--limit", type=int, default=10)
     search_parser.add_argument("--parent", default=None, help="dig down into an abstraction")
+    search_parser.add_argument("--type", default=None, dest="node_type",
+                               help="restrict to one node type, e.g. code-pref")
+    search_parser.add_argument("--json", action="store_true",
+                               help="raw rows with ranks, instead of the rendered block")
+    search_parser.add_argument("--include-autoloaded", action="store_true",
+                               help="do not filter out what T1 already loaded")
+
+    dig_parser = subparsers.add_parser("dig", help="expand one node by its title")
+    dig_parser.add_argument("title")
+    dig_parser.add_argument("--json", action="store_true")
 
     t1_parser = subparsers.add_parser("t1", help="assemble the autoload set")
     t1_parser.add_argument("--scope", default=None)
@@ -101,10 +112,27 @@ def main(argv: list[str] | None = None) -> int:
             _emit(store.remember(connection, specs, args.run_id))
 
         elif args.command == "search":
-            _emit(retrieval.search(
+            # The rendered block is the default: it is what an agent should read,
+            # and the ranks only matter when debugging retrieval itself.
+            hits = retrieval.search(
                 connection, args.query, limit=args.limit,
-                scope=args.scope, parent=args.parent,
-            ))
+                scope=args.scope, parent=args.parent, node_type=args.node_type,
+                exclude_ids=None if args.include_autoloaded
+                else retrieval.t1_ids(connection, scope=args.scope),
+            )
+            if args.json:
+                _emit(hits)
+            else:
+                sys.stdout.write(retrieval.render_context(hits) + "\n")
+
+        elif args.command == "dig":
+            node = retrieval.dig(connection, args.title)
+            if args.json:
+                _emit(node)
+            else:
+                sys.stdout.write(retrieval.render_dig(node, args.title) + "\n")
+            if node is None:
+                return 4
 
         elif args.command == "t1":
             nodes = retrieval.assemble_t1(connection, scope=args.scope)

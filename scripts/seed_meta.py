@@ -16,49 +16,26 @@ from claude_memory.store import remember
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 SUMMARY = """\
-This block is Eric's persistent memory, autoloaded at session start from the \
-claude-memory store (D:\\claude-memory). It survives compaction and crosses \
-sessions and projects, so treat it as established context rather than something \
-Eric said just now. It replaces the former global CLAUDE.md, which no longer \
-exists — do not write memory to that file.
+You have a persistent memory system. Memories lives in nodes, created by you across sessions.
 
-READING. What is above is only the always-on set; far more is stored and \
-searchable. If a question touches Eric's plans, history, notes, or wiki, search \
-the store rather than assuming the answer is absent or asking him to repeat \
-himself. Before writing code, search the code-pref nodes — they are deliberately \
-not autoloaded, and they cover Eric's conventions on naming, indentation, \
-typechecking, and training runs.
+READING. There are plenty of memory nodes searchable. Whenever you think context is missing, search before asking Eric for clarification. Before writing code, search the code-pref nodes. Nodes typed `raw` are unread document text, chunked and indexed but never judged; if one actually answers something, extract the claim as a typed node and supersede the chunk with it.
 
-Retrieved memories arrive one per line as `type, date, title, content`, with the \
-content truncated. Titles are unique and are the handle: to read a memory in \
-full — its exact wording, its time window, whether it is stale, what superseded \
-it, what it links to — dig it up by its title. Do that whenever a truncated line \
-looks like it matters, rather than acting on the fragment.
+WRITING. Be an active memorizer, not a passive one: capture as a normal part of finishing a task, without being asked, and at the moment it happens rather than batched to the end of a session that may run out of context first. Capture when Eric corrects you or pushes back — the highest-value signal, and save the reason along with the correction; when he states a preference, constraint, or convention; when he reveals a change in his situation; when a decision is made after weighing options, together with why it won, so it is not relitigated; and when you discover something a future session would waste time rediscovering — a build or test command, an environment quirk, a root cause, an API gotcha. Do not save what is already plain from the code, git history, or existing docs. When unsure, lean toward saving: a slightly redundant node is cheap, a lost insight costs a session. After writing one unprompted, say so in one short line so Eric can correct it.
 
-Hits typed `raw` are unread document text, chunked out of Eric's notes and \
-indexed without anything having judged what they claim. Treat them as leads, not \
-as established fact. If a raw chunk actually answers something, that reading is \
-worth keeping: extract the claim as a properly typed node and supersede the \
-chunk with it. Only do this for chunks you genuinely read and used — leaving the \
-rest raw is the correct outcome, not a backlog.
+To be specific, these are node types you can write and read:
+| Type | Meaning | Time |
+|---|---|---|
+| `fact` | A proposition true **at least since** `window_start` | `[window_start, window_end]`; null end = unknown |
+| `action` | Someone did something — user, agent, or third party | `window_start` (= end, or a range if durative) |
+| `todo` | Something necessary or decided — a todo list or calendar item | `window_end` = due date, if any |
+| `intention` | Someone wants to and may do something — not yet committed | when expressed |
+| `idea` | A thought or proposal, large or small | when thought |
+| `conv-pref` | How the agent should communicate or behave | — |
+| `code-pref` | A coding constraint or convention | — |
 
-WRITING. Be an active memorizer, not a passive one: capture as a normal part of \
-finishing a task, without being asked, and at the moment it happens rather than \
-batched to the end of a session that may run out of context first. Capture when \
-Eric corrects you or pushes back — the highest-value signal, and save the reason \
-along with the correction; when he states a preference, constraint, or \
-convention; when he reveals a change in his situation; when a decision is made \
-after weighing options, together with why it won, so it is not relitigated; and \
-when you discover something a future session would waste time rediscovering — a \
-build or test command, an environment quirk, a root cause, an API gotcha. Do not \
-save what is already plain from the code, git history, or existing docs. When \
-unsure, lean toward saving: a slightly redundant node is cheap, a lost insight \
-costs a session. After writing one unprompted, say so in one short line so Eric \
-can correct it.
+Summaries are immutable. When reality changes, supersede the old node rather than rewriting it; mark an intention stale when Eric says he no longer intends it.
 
-Summaries are immutable. When reality changes, supersede the old node rather \
-than rewriting it; mark an intention stale when Eric says he no longer intends \
-it.\
+\
 """
 
 connection = connect()
