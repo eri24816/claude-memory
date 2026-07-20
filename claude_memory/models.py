@@ -96,6 +96,10 @@ def validate(node: Node) -> None:
         errors.append("id is required")
     if not node.summary or not node.summary.strip():
         errors.append("summary is required")
+    # The title is the agent-facing handle: it is what retrieval prints and what
+    # a dig resolves against, so it cannot be optional and cannot collide.
+    if not node.title or not node.title.strip():
+        errors.append("title is required")
     if node.type not in NODE_TYPES:
         errors.append(f"unknown type {node.type!r}; expected one of {sorted(NODE_TYPES)}")
     if node.origin not in ORIGINS:

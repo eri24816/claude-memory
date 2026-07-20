@@ -51,7 +51,6 @@ def test_raw_still_reachable_by_search(workspace):
 
     hits = retrieval.search_stratified(connection, "why is my espresso shot sour")
     assert any(hit["type"] == "raw" for hit in hits)
-    assert retrieval.refine_hint(hits)
 
 
 def test_refined_node_outranks_the_raw_chunk(workspace):
@@ -62,7 +61,7 @@ def test_refined_node_outranks_the_raw_chunk(workspace):
     ).fetchone()["id"]
 
     store.remember(connection, [{
-        "op": "supersede", "supersedes": raw_id,
+        "op": "supersede", "supersedes": raw_id, "title": "Grind size and extraction",
         "summary": "A finer espresso grind slows flow and raises extraction, so a "
                    "sour shot calls for a finer setting before a longer one.",
         "type": "fact", "about_user": False,
@@ -83,7 +82,7 @@ def test_reingest_keeps_refinements_of_surviving_sections(workspace):
         "SELECT id FROM nodes WHERE title LIKE '%Grind size%'"
     ).fetchone()["id"]
     store.remember(connection, [{
-        "op": "supersede", "supersedes": raw_id,
+        "op": "supersede", "supersedes": raw_id, "title": "Grind size and extraction",
         "summary": "Finer grind, higher extraction.", "type": "fact",
         "about_user": False,
     }])

@@ -44,6 +44,35 @@ def _unique_id(connection: sqlite3.Connection, candidate: str) -> str:
     return identifier
 
 
+def _unique_title(connection: sqlite3.Connection, candidate: str) -> str:
+    """Suffix a colliding title until it is free."""
+    title = candidate
+    suffix = 2
+    while connection.execute(
+        "SELECT 1 FROM nodes WHERE title = ?", (title,)
+    ).fetchone():
+        title = f"{candidate} ({suffix})"
+        suffix += 1
+    return title
+
+
+def _retire_title(connection: sqlite3.Connection, node_id: str, title: str) -> None:
+    """Free a title held by a node being superseded, suffixing the old holder.
+
+    A title names a concept, not a version, so the current node has to be the one
+    it resolves to. The alternative — letting the newcomer take the suffix —
+    means every re-statement pushes the live node further from its natural name
+    while the bare title keeps pointing at something dead.
+
+    Superseded nodes are excluded from retrieval anyway, so the suffixed title is
+    only ever reached by deliberately digging through history.
+    """
+    connection.execute(
+        "UPDATE nodes SET title = ? WHERE id = ?",
+        (_unique_title(connection, title), node_id),
+    )
+
+
 def _next_revision(connection: sqlite3.Connection, node_id: str) -> int:
     row = connection.execute(
         "SELECT COALESCE(MAX(revision), 0) + 1 FROM node_revisions WHERE node_id = ?",
@@ -86,6 +115,7 @@ def _insert(
     connection: sqlite3.Connection, node: Node, capture_run_id: str | None
 ) -> str:
     validate(node)
+    node.title = _unique_title(connection, node.title)
     node.updated = node.updated or now()
     cursor = connection.execute(
         f"INSERT INTO nodes ({', '.join(NODE_COLUMNS)}) "
@@ -110,7 +140,7 @@ def _supersede(
     capture_run_id: str | None,
 ) -> str:
     target = connection.execute(
-        "SELECT id, type, superseded_by FROM nodes WHERE id = ?", (old_id,)
+        "SELECT id, type, title, superseded_by FROM nodes WHERE id = ?", (old_id,)
     ).fetchone()
 
     if target is None:
@@ -125,6 +155,9 @@ def _supersede(
             f"cannot supersede {old_id!r}: already superseded by "
             f"{target['superseded_by']!r}"
         )
+
+    if new_node.title == target["title"]:
+        _retire_title(connection, target["id"], target["title"])
 
     new_id = _insert(connection, new_node, capture_run_id)
     connection.execute(
@@ -141,7 +174,9 @@ def _node_from_spec(connection: sqlite3.Connection, spec: dict[str, Any]) -> Nod
         for key, value in spec.items()
         if key not in {"op", "supersedes", "error", "id"}
     }
-    identifier = spec.get("id") or slugify(spec.get("title") or spec["summary"])
+    if fields.get("title"):
+        fields["title"] = fields["title"].strip()
+    identifier = spec.get("id") or slugify(fields.get("title") or spec["summary"])
     return Node(id=_unique_id(connection, identifier), **fields)
 
 

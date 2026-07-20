@@ -238,6 +238,21 @@ def search(
         connection.close()
 
 
+@app.get("/api/dig")
+def dig(title: str) -> dict[str, Any]:
+    """Expand one node by the title retrieval printed."""
+    connection = _connection()
+    try:
+        node = retrieval.dig(connection, title)
+        return {
+            "found": node is not None,
+            "node": node,
+            "block": retrieval.render_dig(node, title),
+        }
+    finally:
+        connection.close()
+
+
 @app.get("/api/auto")
 def auto(message: str, scope: str | None = None) -> dict[str, Any]:
     """Simulate the per-message retrieval path before the hook is wired."""

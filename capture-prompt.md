@@ -95,9 +95,17 @@ quirks are almost always `global`.
 → `2026-08-01`). Estimate open-ended ends where a reasonable estimate exists; leave
 `window_end` null only when the end is genuinely unknowable.
 
-**`title`** — short noun phrase. **`summary`** — one self-contained sentence that makes
-sense with **zero** conversation context; assume the reader never saw this session.
-Summaries are immutable, so write them to stand alone permanently.
+**`title`** — **required, and the handle.** A short noun phrase, unique across the whole
+store; it is what retrieval prints and what a later agent digs by to read the node in
+full. Make it specific enough to be worth quoting back: *"Ann Arbor apartment"*, not
+*"apartment"*. A collision is auto-suffixed `(2)`, which is a smell, not a feature — it
+means two nodes are claiming the same name. When you `supersede`, reuse the old node's
+title verbatim: the successor inherits it and the retired node takes the suffix, so the
+title keeps naming whatever is currently true.
+
+**`summary`** — one self-contained sentence that makes sense with **zero** conversation
+context; assume the reader never saw this session. Summaries are immutable, so write them
+to stand alone permanently.
 
 ## Superseding
 

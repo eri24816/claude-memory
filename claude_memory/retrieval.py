@@ -178,26 +178,6 @@ def search_stratified(
     return sorted([*personal, *world], key=lambda hit: hit["score"], reverse=True)
 
 
-REFINE_HINT = (
-    "Some hits above are type 'raw': unread document text, chunked on headings "
-    "and indexed without anyone judging what it claims. If one of them actually "
-    "answered the question, that is worth keeping properly — extract the claim "
-    "as a typed node and supersede the raw chunk with it "
-    "(op='supersede', supersedes=<raw id>). Only do this for chunks you read and "
-    "used; leaving the rest raw is the correct outcome."
-)
-
-
-def refine_hint(hits: list[dict[str, Any]]) -> str:
-    """Prompt the agent to upgrade raw chunks it just found useful.
-
-    Refinement is driven by retrieval rather than by a background pass: a chunk
-    is worth a model's attention exactly when a real question has pulled it up,
-    and at that moment the agent has the question in hand to extract against.
-    """
-    return REFINE_HINT if any(hit["type"] == "raw" for hit in hits) else ""
-
-
 # A raw chunk runs to MAX_SECTION_CHARS (1500), so three of them would inject
 # ~4.5k characters into every message. Retrieved text is a pointer, not the
 # document: the id travels with each hit, so an agent that wants the whole
@@ -205,31 +185,111 @@ def refine_hint(hits: list[dict[str, Any]]) -> str:
 HIT_CHARS = 400
 
 
-def render_context(
-    hits: list[dict[str, Any]], heading: str = "# Memory — retrieved for this message"
-) -> str:
-    """Render retrieved hits as the literal text an agent receives.
+def _date_field(node: dict[str, Any]) -> str:
+    start, end = node.get("window_start"), node.get("window_end")
+    if not start and not end:
+        return "-"
+    if start and end:
+        return start if start == end else f"{start}..{end}"
+    return f"{start}.." if start else f"..{end}"
 
-    Ids are included because retrieval is also the refinement path: an agent that
-    reads a raw chunk needs its id to supersede it.
+
+def render_context(
+    hits: list[dict[str, Any]], heading: str = "# memory that could be useful:"
+) -> str:
+    """Render hits as one comma-delimited row each: type, date, title, content.
+
+    Deliberately bare. This text is injected on every qualifying message, so
+    prose framing is a per-message tax; the standing instructions for reading it
+    — including what a `raw` hit means — live once in the meta node instead.
+
+    The title doubles as the handle: it is unique, so an agent that wants the
+    whole node digs by the title printed here.
     """
     if not hits:
         return ""
 
-    lines = [heading, ""]
+    lines = [heading]
     for hit in hits:
-        summary = " ".join(hit["summary"].split())
-        if len(summary) > HIT_CHARS:
-            summary = summary[:HIT_CHARS].rstrip() + "… (truncated)"
-        window = ""
-        if hit.get("window_start") or hit.get("window_end"):
-            window = f" [{hit.get('window_start') or ''}..{hit.get('window_end') or ''}]"
-        title = f"**{hit['title']}** — " if hit.get("title") else ""
-        lines.append(f"- `{hit['type']}` {title}{summary}{window}  \n  `{hit['id']}`")
+        content = " ".join(hit["summary"].split())
+        if len(content) > HIT_CHARS:
+            content = content[:HIT_CHARS].rstrip() + "…"
+        lines.append(f"{hit['type']}, {_date_field(hit)}, {hit['title']}, {content}")
+    return "\n".join(lines)
 
-    hint = refine_hint(hits)
-    if hint:
-        lines.extend(["", hint])
+
+DIG_FIELDS = (
+    "title", "type", "summary", "about_user", "scope",
+    "window_start", "window_end", "stale", "origin", "locator", "updated",
+)
+
+
+def dig(connection: sqlite3.Connection, title: str) -> dict[str, Any] | None:
+    """Expand one node by its title, the handle retrieval prints.
+
+    Retrieval shows a truncated line; this is how an agent reads the whole thing
+    and sees what it connects to. Links resolve to titles rather than ids,
+    because ids never appear in what the agent was shown — handing back a
+    dangling slug would be a reference it cannot follow.
+    """
+    row = connection.execute(
+        f"SELECT rowid, id, superseded_by, parent, {', '.join(DIG_FIELDS)} "
+        "FROM nodes WHERE title = ?",
+        (title,),
+    ).fetchone()
+    if row is None:
+        return None
+
+    def title_of(node_id: str | None) -> str | None:
+        if not node_id:
+            return None
+        found = connection.execute(
+            "SELECT title FROM nodes WHERE id = ?", (node_id,)
+        ).fetchone()
+        return found["title"] if found else None
+
+    node = {field: row[field] for field in DIG_FIELDS}
+    node["about_user"] = None if row["about_user"] is None else bool(row["about_user"])
+    node["stale"] = bool(row["stale"])
+    node["superseded_by"] = title_of(row["superseded_by"])
+    node["parent"] = title_of(row["parent"])
+    node["supersedes"] = [
+        found["title"] for found in connection.execute(
+            "SELECT title FROM nodes WHERE superseded_by = ?", (row["id"],)
+        )
+    ]
+    node["edges"] = [
+        {"rel": edge["rel"], "to": edge["title"]}
+        for edge in connection.execute(
+            "SELECT e.rel, n.title FROM node_edges AS e "
+            "JOIN nodes AS n ON n.id = e.dst_id WHERE e.src_id = ?",
+            (row["id"],),
+        )
+    ]
+    return node
+
+
+def render_dig(node: dict[str, Any] | None, title: str = "") -> str:
+    """Render a dig result as the literal text the agent receives."""
+    if node is None:
+        return f"No memory titled {title!r}."
+
+    lines = [f"# {node['title']}"]
+    for field in ("type", "about_user", "scope", "origin", "stale", "updated"):
+        if node[field] is not None:
+            lines.append(f"{field}: {node[field]}")
+    if node["window_start"] or node["window_end"]:
+        lines.append(f"time: {_date_field(node)}")
+    if node["locator"]:
+        lines.append(f"source: {node['locator']}")
+    for field in ("superseded_by", "parent"):
+        if node[field]:
+            lines.append(f"{field}: {node[field]}")
+    if node["supersedes"]:
+        lines.append(f"supersedes: {', '.join(node['supersedes'])}")
+    for edge in node["edges"]:
+        lines.append(f"{edge['rel']}: {edge['to']}")
+    lines.extend(["", node["summary"]])
     return "\n".join(lines)
 
 
@@ -307,8 +367,12 @@ def render_t1(nodes: list[dict[str, Any]]) -> str:
     for node in nodes:
         by_type.setdefault(node["type"], []).append(node)
 
+    # meta first: it is the instructions for reading everything under it, and a
+    # reader who meets the facts before the rules has already read them wrong.
+    ordered = sorted(by_type, key=lambda name: (name != "meta", name))
+
     lines = ["# Memory"]
-    for node_type in sorted(by_type):
+    for node_type in ordered:
         lines.append(f"\n## {node_type}")
         for node in by_type[node_type]:
             window = ""

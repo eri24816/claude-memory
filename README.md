@@ -180,6 +180,22 @@ Per-message retrieval matters most: the recurring failure is not that the agent 
 find a node, but that it does not know one exists to look for. Active search only fires
 when the agent already suspects something is there.
 
+**Titles are the agent-facing handle.** They are required and unique, and retrieval prints
+one per hit, so an agent that wants a node in full digs by the title it was just shown —
+getting the untruncated summary, the time window, staleness, and every link resolved to a
+title rather than an id, since ids never appear in what the agent saw. Uniqueness is
+enforced by index, not convention: a duplicate makes a dig silently ambiguous.
+
+Supersession **transfers** the title to the successor and suffixes the retired node. A
+title names a concept, not a version, so it has to resolve to whatever is currently true;
+the alternative pushes the live node further from its natural name on every restatement
+while the bare title keeps pointing at something dead.
+
+Retrieved hits render as one bare row each — `type, date, title, content`, under a single
+`# memory that could be useful:` heading. Nothing else. Standing instructions for reading
+them, including what a `raw` hit means and when to dig, live once in `meta`: guidance
+repeated on every message is a per-message tax.
+
 **Both search paths exclude what T1 already loaded.** Retrieval competes for a budget the
 autoload set has already spent, and a node returned verbatim into context it is already in
 costs a slot twice over — worse, it reads as two independent sources agreeing when it is

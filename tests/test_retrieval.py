@@ -8,18 +8,22 @@ from claude_memory import db, retrieval, store
 
 NODES = [
     {
+        "title": "Move-in and key pickup",
         "summary": "Eric arrives at the Traver Heights apartment on 2026-08-05 around 10 PM.",
         "type": "todo", "about_user": True, "window_start": "2026-08-05",
     },
     {
+        "title": "Ann Arbor apartment",
         "summary": "Eric's Ann Arbor apartment is at 2442 Leslie Circle, lease starting 2026-07-17.",
         "type": "fact", "about_user": True, "window_start": "2026-07-17",
     },
     {
+        "title": "Fizz rebranded to Mine",
         "summary": "The student credit-builder Fizz now operates as Mine (usemine.com).",
         "type": "fact", "about_user": False, "window_start": "2026-07-20",
     },
     {
+        "title": "D drive root is not writable",
         "summary": "Writing to the D drive root fails with EPERM; use a subdirectory instead.",
         "type": "code-pref",
     },
@@ -73,6 +77,7 @@ def test_stratified_guarantees_personal_slots(connection):
     """
     world_filler = [
         {
+            "title": f"University statement {index}",
             "summary": f"Statement about university number {index} and moving between campuses next year.",
             "type": "fact", "about_user": False, "window_start": "2026-01-01",
         }
@@ -104,7 +109,8 @@ def test_exclusion_does_not_shrink_the_result_set(connection):
     """Regression risk: filtering after LIMIT would let excluded rows consume
     slots, silently returning fewer hits than asked for."""
     filler = [
-        {"summary": f"Note number {index} about apartments and moving house.",
+        {"title": f"Apartment note {index}",
+         "summary": f"Note number {index} about apartments and moving house.",
          "type": "fact", "about_user": False, "window_start": "2026-01-01"}
         for index in range(10)
     ]

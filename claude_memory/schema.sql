@@ -24,6 +24,11 @@ CREATE TABLE IF NOT EXISTS nodes (
     updated         TEXT NOT NULL
 );
 
+-- The title is the agent-facing handle for digging into a node, so it has to
+-- resolve to exactly one row. Enforced here rather than only in store.py,
+-- because a duplicate makes a dig silently ambiguous.
+CREATE UNIQUE INDEX IF NOT EXISTS nodes_title ON nodes(title);
+
 CREATE INDEX IF NOT EXISTS nodes_window     ON nodes(window_start, window_end);
 CREATE INDEX IF NOT EXISTS nodes_scope      ON nodes(scope);
 CREATE INDEX IF NOT EXISTS nodes_type       ON nodes(type);

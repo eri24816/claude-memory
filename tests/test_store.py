@@ -65,7 +65,8 @@ def test_window_order_enforced(connection):
 def test_idea_cannot_be_superseded(connection):
     written = store.remember(
         connection,
-        [{"summary": "Try slot attention on symbolic music.", "type": "idea"}],
+        [{"title": "Slot attention on symbolic music",
+          "summary": "Try slot attention on symbolic music.", "type": "idea"}],
     )["written"][0]
 
     with pytest.raises(InvariantError, match="stays valid"):
@@ -74,6 +75,7 @@ def test_idea_cannot_be_superseded(connection):
             [{
                 "op": "supersede",
                 "supersedes": written,
+                "title": "Ran the slot attention experiment",
                 "summary": "Ran the slot attention experiment.",
                 "type": "action",
                 "about_user": True,
@@ -84,7 +86,8 @@ def test_idea_cannot_be_superseded(connection):
 def test_todo_superseded_by_action(connection):
     todo_id = store.remember(
         connection,
-        [{"summary": "Get a US SSN.", "type": "todo", "about_user": True}],
+        [{"title": "Get a US SSN", "summary": "Get a US SSN.",
+          "type": "todo", "about_user": True}],
     )["written"][0]
 
     action_id = store.remember(
@@ -92,6 +95,7 @@ def test_todo_superseded_by_action(connection):
         [{
             "op": "supersede",
             "supersedes": todo_id,
+            "title": "Eric obtained a US SSN",
             "summary": "Eric obtained a US SSN.",
             "type": "action",
             "about_user": True,
@@ -111,11 +115,14 @@ def test_todo_superseded_by_action(connection):
 
 def test_double_supersede_rejected(connection):
     todo_id = store.remember(
-        connection, [{"summary": "Open a bank account.", "type": "todo", "about_user": True}]
+        connection, [{"title": "Open a bank account",
+                      "summary": "Open a bank account.", "type": "todo",
+                      "about_user": True}]
     )["written"][0]
     supersede = {
         "op": "supersede",
         "supersedes": todo_id,
+        "title": "Eric opened a bank account",
         "summary": "Eric opened a bank account.",
         "type": "action",
         "about_user": True,
@@ -127,7 +134,8 @@ def test_double_supersede_rejected(connection):
 
 def test_batch_is_atomic(connection):
     with pytest.raises(InvariantError):
-        store.remember(connection, [CHROME_PREF, {"summary": "bad", "type": "nonsense"}])
+        store.remember(connection, [CHROME_PREF,
+                                    {"title": "bad", "summary": "bad", "type": "nonsense"}])
     assert connection.execute("SELECT COUNT(*) FROM nodes").fetchone()[0] == 0
 
 
@@ -146,6 +154,7 @@ def test_t1_excludes_world_facts(connection):
         [
             UMICH,
             {
+                "title": "Fizz rebranded to Mine",
                 "summary": "The credit builder Fizz now operates as Mine.",
                 "type": "fact",
                 "about_user": False,
@@ -162,6 +171,7 @@ def test_t1_respects_lead_time(connection):
     store.remember(
         connection,
         [{
+            "title": "Future postdoc",
             "summary": "Eric will start a postdoc.",
             "type": "fact",
             "about_user": True,
@@ -175,6 +185,7 @@ def test_scope_isolation(connection):
     store.remember(
         connection,
         [{
+            "title": "Dev server launch command",
             "summary": "The dev server is started with run.bat.",
             "type": "fact",
             "about_user": True,
@@ -190,6 +201,7 @@ def test_edges_require_existing_target(connection):
         store.remember(
             connection,
             [{
+                "title": "Apply slot attention to music",
                 "summary": "Eric plans to apply slot attention to music.",
                 "type": "intention",
                 "about_user": True,
