@@ -94,20 +94,35 @@ purposes.
 
 ## Tier function
 
+T1 is **categorical, not ranked** — take these sets whole, capping only the volatile
+types. No priority function is needed.
+
+| Set | Rule |
+|---|---|
+| `meta` | all |
+| `conv-pref`, `code-pref` | all |
+| `fact` | `about_user` and not yet ended |
+| `todo` | `about_user` and still open |
+| `idea`, `action`, `intention` | `about_user`, 3 most recent of each |
+
 ```sql
--- T1 eligibility
-   type IN ('meta', 'conv-pref', 'code-pref')                    -- always
+   type IN ('meta', 'conv-pref', 'code-pref')
 OR (about_user AND type = 'fact'
     AND NOT stale
-    AND (window_end IS NULL OR date('now') <= window_end))       -- currently true
-OR (about_user AND type = 'action'
-    AND window_start >= date('now', '-' || :recency_param))      -- recent
+    AND (window_end IS NULL OR date('now') <= window_end))
 OR (about_user AND type = 'todo'
-    AND superseded_by IS NULL AND NOT stale)                     -- still open
-
--- then: rank by priority, take top-K within t1_budget; overflow falls to T2.
+    AND superseded_by IS NULL AND NOT stale)
+-- plus: 3 most recent each of idea / action / intention, about_user
 -- autoload set = global-T1 + project-T1 (current project only)
 ```
+
+The `fact` predicate checks only `window_end`, so a fact whose window *starts* in the
+future is in T1 from the moment it is recorded — the UMich enrolment is autoloaded today,
+weeks before 2026-08-05. This is deliberate, and it removes the need for a `lead_time`
+parameter.
+
+Every set here is self-limiting except **open todos**, which shrink only when closed. If
+T1 outgrows its budget, that is the category to cap first.
 
 `scope` (`global | project:<name>`) is orthogonal to tier and fixes cross-project
 siloing. **When in doubt, `global`** — a wrongly project-scoped fact is invisible
@@ -300,13 +315,16 @@ the `superseded_by` clause.
 
 | Parameter | Meaning | Default |
 |---|---|---|
-| `t1_budget` | autoload token cap | **open — pin first** |
-| `priority` | ranking when T1 candidates overflow | **open** |
-| `recency_param` | recent-`action` window | 1 month |
-| `lead_time` | how early upcoming facts promote to T1 | open |
+| `t1_budget` | autoload cap — a ceiling to alarm on, not a ranking input | 8,000 chars (~2k tokens) |
+| `recent_n` | per-type cap for idea / action / intention in T1 | 3 |
 | `N_redundant` | redundant hits before abstraction fires | open |
 | `rrf_k` | RRF constant | 60 |
 | `candidate_k` | per-index over-fetch before fusion | 200 |
+
+`priority` and `lead_time` are gone: T1 selection is categorical rather than ranked, and
+the `fact` predicate already admits future-dated windows. `t1_budget` is now only a
+tripwire — if the categorical set exceeds it, cap open todos rather than introducing a
+ranking function.
 
 **RRF replaces weight tuning.** BM25 scores and cosine distances are on incomparable
 scales; fusing by *rank* needs one constant you never touch.
