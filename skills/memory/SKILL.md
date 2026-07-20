@@ -72,7 +72,36 @@ Use when Eric says he no longer intends something.
 `python -m claude_memory rollback <id>` undoes that whole batch.
 
 Never supersede an `idea` — it stays valid however much work it spawns. Link
-instead: `"edges": [{"rel": "motivates", "dst": "<title>"}]`.
+instead with an edge (below).
+
+## Edges
+
+Two `rel` values exist, and they mean different things. `dig` renders both
+directions — everything a node points at, and everything that points at it
+(`relates`/`motivates` out, `supersedes`/`superseded_by` in) — so an edge is
+how a later agent, in this session or another, sees why a node exists and
+what else it connects to, not just its bare text. Without one, a node this
+useful sits invisible until someone happens to search the right words.
+
+- **`motivates`** — the commitment ladder only, `idea → intention → todo`.
+  Use it exactly where you'd otherwise supersede an idea or an umbrella
+  intention, which is never allowed. Points forward, toward what it led to.
+- **`relates`** — everything else. A request that triggered research links to
+  what the research produced; two facts informing the same open question;
+  any connection worth a future `dig` surfacing that isn't the ladder.
+
+```json
+[{ "title": "Asked which card to get", "type": "action", "about_user": true,
+   "summary": "Eric asked which US card to get.", "window_start": "2026-07-20",
+   "window_end": "2026-07-20",
+   "edges": [{ "rel": "relates", "dst": "Leaning toward Zolve as primary card" }] }]
+```
+
+`dst` is a **title**, resolved the same way `supersedes` is — including a
+title of another node in the *same* batch, so an action and what it produced
+can be written and linked in one `remember` call. Both ends must already
+exist; a `dst` naming nothing raises an error instead of writing a dangling
+edge.
 
 ## Refining `raw`
 
