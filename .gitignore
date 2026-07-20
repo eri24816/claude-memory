@@ -9,6 +9,7 @@ snapshots/
 .fastembed_cache/
 
 # Python
+*.egg-info/
 __pycache__/
 *.py[cod]
 .venv/

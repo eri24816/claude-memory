@@ -1,0 +1,25 @@
+[project]
+name = "claude-memory"
+version = "0.1.0"
+description = "Tiered memory for Claude: autoloaded T1 plus hybrid BM25/vector retrieval"
+requires-python = ">=3.11"
+dependencies = [
+    "sqlite-vec>=0.1.9",
+    "fastembed>=0.4",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["claude_memory"]
+
+[tool.setuptools.package-data]
+claude_memory = ["schema.sql"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

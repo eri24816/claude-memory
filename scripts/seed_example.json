@@ -1,0 +1,71 @@
+[
+  {
+    "title": "MSCSE at University of Michigan",
+    "summary": "Eric is enrolled in the MSCSE program at University of Michigan EECS from 2026-08-05, with expected graduation in spring 2028.",
+    "type": "fact",
+    "about_user": true,
+    "scope": "global",
+    "window_start": "2026-08-05",
+    "window_end": "2028-05-31"
+  },
+  {
+    "title": "Ann Arbor apartment",
+    "summary": "Eric's Ann Arbor apartment is at 2442 Leslie Circle (Traver Heights, near UMich North Campus), lease starting 2026-07-17.",
+    "type": "fact",
+    "about_user": true,
+    "window_start": "2026-07-17",
+    "window_end": "2027-07-31"
+  },
+  {
+    "title": "Apartment roommates",
+    "summary": "Eric shares the Traver Heights lease with two roommates, Kai-Po Wei and Hsiang-Yu Kung.",
+    "type": "fact",
+    "about_user": true,
+    "window_start": "2026-07-17",
+    "window_end": "2027-07-31"
+  },
+  {
+    "title": "Fizz has rebranded to Mine",
+    "summary": "The student credit-builder Fizz now operates as Mine (usemine.com).",
+    "type": "fact",
+    "about_user": false,
+    "window_start": "2026-07-20"
+  },
+  {
+    "title": "Get a US SSN",
+    "summary": "Eric needs to apply for a US SSN once he has an on-campus job or funded assistantship, which unlocks mainstream US credit cards.",
+    "type": "todo",
+    "about_user": true,
+    "window_start": "2026-07-20"
+  },
+  {
+    "title": "Move-in and key pickup",
+    "summary": "Eric arrives at the Traver Heights apartment on 2026-08-05 around 10 PM and requested lockbox key pickup.",
+    "type": "todo",
+    "about_user": true,
+    "window_start": "2026-08-05",
+    "window_end": "2026-08-05"
+  },
+  {
+    "title": "Publish documents as artifacts",
+    "summary": "When Eric asks for a written document, publish it as an artifact rather than only writing a local file.",
+    "type": "conv-pref"
+  },
+  {
+    "title": "D drive root is not writable",
+    "summary": "Writing to the D drive root fails with EPERM; write into a subdirectory such as D:\\claude-memory instead.",
+    "type": "code-pref"
+  },
+  {
+    "title": "Windows paging file limits torch workers",
+    "summary": "On this Windows machine a torch DataLoader with num_workers above 2 triggers WinError 1455; keep num_workers at 2 or fewer.",
+    "type": "code-pref"
+  },
+  {
+    "title": "Tiered memory system design",
+    "summary": "Eric is building claude-memory at D:\\claude-memory, a two-tier memory system with autoloaded T1 and hybrid BM25/vector retrieval on SQLite.",
+    "type": "action",
+    "about_user": true,
+    "window_start": "2026-07-20"
+  }
+]
