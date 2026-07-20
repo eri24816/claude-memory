@@ -107,6 +107,32 @@
   .verdict { font-weight: 650; }
   .verdict.no { color: var(--hot); }
   .empty { padding: 2rem; text-align: center; color: var(--ink-faint); font-size: 0.86rem; }
+  .graph-layout { display: grid; grid-template-columns: minmax(0, 1fr) 19rem; gap: 1rem; }
+  .graph-stage {
+    position: relative; min-height: 620px; overflow: hidden;
+    border: 1px solid var(--rule); border-radius: 6px; background: var(--surface);
+    cursor: grab; touch-action: none;
+  }
+  .graph-stage.dragging { cursor: grabbing; }
+  #graph-svg { display: block; width: 100%; height: 620px; }
+  .graph-point { cursor: pointer; stroke-width: 1.5; transition: opacity 120ms, r 120ms; }
+  .graph-point:hover, .graph-point.selected { stroke-width: 3; }
+  .graph-point.world { stroke: var(--surface); }
+  .graph-point.personal { stroke: var(--ink); }
+  .graph-side {
+    border: 1px solid var(--rule); border-radius: 6px; background: var(--surface);
+    padding: 1rem; min-height: 12rem;
+  }
+  .graph-side h2 { margin: 0 0 0.65rem; font-size: 0.92rem; }
+  .graph-summary { font-size: 0.84rem; overflow-wrap: anywhere; }
+  .legend { display: flex; flex-wrap: wrap; gap: 0.45rem 0.8rem; margin-bottom: 0.8rem; }
+  .legend-item { display: inline-flex; align-items: center; gap: 0.35rem; font-size: 0.72rem; color: var(--ink-soft); }
+  .legend-dot { width: 0.65rem; height: 0.65rem; border-radius: 50%; }
+  .graph-meta { margin-top: 0.8rem; font-family: var(--mono); font-size: 0.7rem; color: var(--ink-faint); }
+  @media (max-width: 850px) {
+    .graph-layout { grid-template-columns: 1fr; }
+    .graph-stage, #graph-svg { min-height: 480px; height: 480px; }
+  }
 </style>
 </head>
 <body>
@@ -122,6 +148,7 @@
   <button data-tab="t1" aria-selected="false">Autoloaded (T1)</button>
   <button data-tab="auto" aria-selected="false">Per-message</button>
   <button data-tab="active" aria-selected="false">Active search</button>
+  <button data-tab="graph" aria-selected="false">Graph</button>
 </nav>
 
 <main>
@@ -197,6 +224,32 @@
       <tbody id="q-body"></tbody>
     </table></div>
   </section>
+
+  <section id="tab-graph" hidden>
+    <div class="controls">
+      <label for="graph-scope">Project scope</label>
+      <select id="graph-scope"><option value="">global only</option></select>
+      <select id="graph-type"><option value="">all types</option></select>
+      <select id="graph-about">
+        <option value="">personal + world</option>
+        <option value="true">personal only</option>
+        <option value="false">world only</option>
+      </select>
+      <input type="search" id="graph-q" placeholder="highlight text…">
+    </div>
+    <div class="graph-layout">
+      <div id="graph-stage" class="graph-stage" aria-label="2D semantic memory map">
+        <svg id="graph-svg" role="img" aria-label="Memory embeddings projected to two dimensions"></svg>
+      </div>
+      <aside class="graph-side">
+        <h2>Semantic map</h2>
+        <div id="graph-legend" class="legend"></div>
+        <p class="muted">Nearby points have similar embedding direction. Drag to pan, scroll to zoom, and select a point for details.</p>
+        <div id="graph-detail" class="graph-summary muted">Select a memory.</div>
+        <div id="graph-meta" class="graph-meta"></div>
+      </aside>
+    </div>
+  </section>
 </main>
 
 <script>
@@ -208,6 +261,13 @@ const get = async (path, params) => {
   Object.entries(params || {}).forEach(([k, v]) => { if (v) url.searchParams.set(k, v); });
   return (await fetch(url)).json();
 };
+const graphColors = {
+  fact: "#e0873f", action: "#db5f57", todo: "#e0b13f", intention: "#b977d1",
+  idea: "#65a7d8", meta: "#58b5a1", "conv-pref": "#7faad6", "code-pref": "#8d93dc",
+};
+let graphData = null;
+let graphTransform = { x: 0, y: 0, scale: 1 };
+let graphDragging = null;
 
 function windowText(node) {
   if (!node.window_start && !node.window_end) return "";
@@ -246,9 +306,12 @@ async function loadStats() {
     const option = `<option value="${esc(scope)}">${esc(scope)}</option>`;
     $("f-scope").insertAdjacentHTML("beforeend", option);
     if (scope !== "global") {
-      ["t1-scope", "auto-scope", "q-scope"].forEach((id) => $(id).insertAdjacentHTML("beforeend", option));
+      ["t1-scope", "auto-scope", "q-scope", "graph-scope"].forEach((id) => $(id).insertAdjacentHTML("beforeend", option));
     }
   }
+  Object.keys(data.by_type).forEach((type) => {
+    $("graph-type").insertAdjacentHTML("beforeend", `<option>${esc(type)}</option>`);
+  });
 }
 
 async function loadNodes() {
@@ -293,11 +356,69 @@ async function loadActive() {
   $("q-body").innerHTML = hitRows(await get("/api/search", { q: query, scope: $("q-scope").value }));
 }
 
+function renderGraph() {
+  if (!graphData) return;
+  const svg = $("graph-svg");
+  const width = svg.clientWidth || 800;
+  const height = svg.clientHeight || 620;
+  const type = $("graph-type").value;
+  const about = $("graph-about").value;
+  const query = $("graph-q").value.trim().toLowerCase();
+  const visible = graphData.points.filter((point) =>
+    (!type || point.type === type) &&
+    (!about || String(Boolean(point.about_user)) === about)
+  );
+  if (!visible.length) {
+    svg.innerHTML = `<text x="50%" y="50%" text-anchor="middle" fill="var(--ink-faint)">No nodes match these filters.</text>`;
+    return;
+  }
+  const xs = visible.map((point) => point.x);
+  const ys = visible.map((point) => point.y);
+  const xMin = Math.min(...xs), xMax = Math.max(...xs);
+  const yMin = Math.min(...ys), yMax = Math.max(...ys);
+  const spanX = xMax - xMin || 1, spanY = yMax - yMin || 1;
+  const padding = 45;
+  const points = visible.map((point) => {
+    const x = padding + ((point.x - xMin) / spanX) * (width - padding * 2);
+    const y = padding + ((point.y - yMin) / spanY) * (height - padding * 2);
+    const matches = !query || `${point.title || ""} ${point.summary}`.toLowerCase().includes(query);
+    return `<circle class="graph-point ${point.about_user ? "personal" : "world"}"
+      data-id="${esc(point.id)}" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}"
+      r="${point.about_user ? 7 : 5}" fill="${graphColors[point.type] || "#8b95a1"}"
+      opacity="${matches ? 0.92 : 0.12}"><title>${esc(point.title || point.summary)}</title></circle>`;
+  }).join("");
+  svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+  svg.innerHTML = `<g transform="translate(${graphTransform.x} ${graphTransform.y}) scale(${graphTransform.scale})">${points}</g>`;
+  svg.querySelectorAll(".graph-point").forEach((circle) => circle.addEventListener("click", (event) => {
+    event.stopPropagation();
+    const point = graphData.points.find((item) => item.id === circle.dataset.id);
+    svg.querySelectorAll(".selected").forEach((item) => item.classList.remove("selected"));
+    circle.classList.add("selected");
+    $("graph-detail").classList.remove("muted");
+    $("graph-detail").innerHTML = `<span class="chip ${esc(point.type)}">${esc(point.type)}</span>
+      ${point.about_user ? `<span class="flag">personal</span>` : `<span class="muted">world</span>`}
+      <p>${esc(point.summary)}</p><div class="num muted">${esc(point.scope)} · ${esc(point.id)}</div>`;
+  }));
+  $("graph-meta").textContent = `${visible.length} / ${graphData.points.length} nodes · ${graphData.algorithm} from ${graphData.dimensions}D`;
+}
+
+async function loadGraph() {
+  $("graph-svg").innerHTML = `<text x="50%" y="50%" text-anchor="middle" fill="var(--ink-faint)">Projecting embeddings…</text>`;
+  graphData = await get("/api/graph", { scope: $("graph-scope").value });
+  graphTransform = { x: 0, y: 0, scale: 1 };
+  const types = [...new Set(graphData.points.map((point) => point.type))];
+  $("graph-legend").innerHTML = types.map((type) =>
+    `<span class="legend-item"><i class="legend-dot" style="background:${graphColors[type] || "#8b95a1"}"></i>${esc(type)}</span>`
+  ).join("");
+  renderGraph();
+}
+
 document.querySelectorAll("nav button").forEach((button) => {
   button.addEventListener("click", () => {
     document.querySelectorAll("nav button").forEach((other) => other.setAttribute("aria-selected", String(other === button)));
-    ["nodes", "t1", "auto", "active"].forEach((name) => { $(`tab-${name}`).hidden = name !== button.dataset.tab; });
+    ["nodes", "t1", "auto", "active", "graph"].forEach((name) => { $(`tab-${name}`).hidden = name !== button.dataset.tab; });
     if (button.dataset.tab === "t1") loadT1();
+    if (button.dataset.tab === "graph") loadGraph();
   });
 });
 
@@ -308,6 +429,38 @@ $("auto-msg").addEventListener("input", debounce(loadAuto, 300));
 $("auto-scope").addEventListener("change", loadAuto);
 $("q-input").addEventListener("input", debounce(loadActive, 300));
 $("q-scope").addEventListener("change", loadActive);
+$("graph-scope").addEventListener("change", loadGraph);
+["graph-type", "graph-about"].forEach((id) => $(id).addEventListener("change", renderGraph));
+$("graph-q").addEventListener("input", debounce(renderGraph));
+$("graph-stage").addEventListener("wheel", (event) => {
+  event.preventDefault();
+  const bounds = $("graph-svg").getBoundingClientRect();
+  const mouseX = event.clientX - bounds.left;
+  const mouseY = event.clientY - bounds.top;
+  const oldScale = graphTransform.scale;
+  const newScale = Math.max(0.45, Math.min(8, oldScale * (event.deltaY < 0 ? 1.12 : 0.89)));
+  const ratio = newScale / oldScale;
+  graphTransform.x = mouseX - (mouseX - graphTransform.x) * ratio;
+  graphTransform.y = mouseY - (mouseY - graphTransform.y) * ratio;
+  graphTransform.scale = newScale;
+  renderGraph();
+}, { passive: false });
+$("graph-stage").addEventListener("pointerdown", (event) => {
+  if (event.target.closest(".graph-point")) return;
+  graphDragging = { x: event.clientX, y: event.clientY, tx: graphTransform.x, ty: graphTransform.y };
+  $("graph-stage").classList.add("dragging");
+  $("graph-stage").setPointerCapture(event.pointerId);
+});
+$("graph-stage").addEventListener("pointermove", (event) => {
+  if (!graphDragging) return;
+  graphTransform.x = graphDragging.tx + event.clientX - graphDragging.x;
+  graphTransform.y = graphDragging.ty + event.clientY - graphDragging.y;
+  renderGraph();
+});
+$("graph-stage").addEventListener("pointerup", () => {
+  graphDragging = null;
+  $("graph-stage").classList.remove("dragging");
+});
 
 loadStats().then(loadNodes);
 </script>

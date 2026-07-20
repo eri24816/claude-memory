@@ -68,6 +68,19 @@ only when the user says they no longer intend it.
 personal sphere?* Not grammatical subject. "My roommate moved in" → `true`. "Fizz
 rebranded", "LeCun invented LeNet" → `false`. This gates T1, so get it right.
 
+## Refining `raw`
+
+`raw` nodes are document sections that were chunked and indexed without anything reading
+them. **Never emit a `raw` node yourself** — only ingest creates them.
+
+But if retrieval surfaced a raw chunk during this conversation *and you actually used what
+it said*, capture the claims you took from it as normal typed nodes, and set
+`"op": "supersede", "supersedes": "<raw id>"` on the first of them. That retires the
+unread chunk in favour of the reading you just did.
+
+Only refine chunks you genuinely read and used. Leaving the rest raw is the correct
+outcome, not a backlog.
+
 ## Fields
 
 **`scope`** — `global` or `project:<name>`. Test: *would a session in a different

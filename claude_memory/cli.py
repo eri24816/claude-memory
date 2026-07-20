@@ -78,6 +78,11 @@ def main(argv: list[str] | None = None) -> int:
     rollback_parser = subparsers.add_parser("rollback", help="undo a capture run")
     rollback_parser.add_argument("capture_run_id")
 
+    ingest_parser = subparsers.add_parser("ingest", help="heading-split a file or folder")
+    ingest_parser.add_argument("path")
+    ingest_parser.add_argument("--scope", default="global")
+    ingest_parser.add_argument("--dry-run", action="store_true")
+
     sql_parser = subparsers.add_parser("sql", help="read-only query escape hatch")
     sql_parser.add_argument("query")
 
@@ -114,6 +119,13 @@ def main(argv: list[str] | None = None) -> int:
 
         elif args.command == "rollback":
             _emit(store.rollback_run(connection, args.capture_run_id))
+
+        elif args.command == "ingest":
+            from . import ingest as ingest_module
+
+            _emit(ingest_module.ingest_path(
+                connection, args.path, scope=args.scope, dry_run=args.dry_run,
+            ))
 
         elif args.command == "sql":
             connection.set_authorizer(_deny_writes)

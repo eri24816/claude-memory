@@ -64,6 +64,29 @@ def test_component_ranks_are_reported(connection):
     assert any(hit["semantic_rank"] for hit in hits)
 
 
+def test_stratified_guarantees_personal_slots(connection):
+    """Regression: a large world corpus starved the personal nodes entirely.
+
+    With ~500 wiki nodes against six personal ones, a flat ranked list returned
+    only wiki sections for "where am I moving to next month". Stratifying gives
+    each population its own slots.
+    """
+    world_filler = [
+        {
+            "summary": f"Statement about university number {index} and moving between campuses next year.",
+            "type": "fact", "about_user": False, "window_start": "2026-01-01",
+        }
+        for index in range(40)
+    ]
+    store.remember(connection, world_filler)
+
+    flat = retrieval.search(connection, "where am I moving to next month", limit=3)
+    stratified = retrieval.search_stratified(connection, "where am I moving to next month")
+
+    assert not any(hit["about_user"] for hit in flat), "precondition: flat list is starved"
+    assert any(hit["about_user"] for hit in stratified)
+
+
 @pytest.mark.parametrize("message", ["ok", "yes", "do it", "no thanks"])
 def test_trivial_messages_do_not_trigger_retrieval(message):
     assert retrieval.should_retrieve(message) is False

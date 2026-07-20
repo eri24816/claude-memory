@@ -8,6 +8,7 @@ import unicodedata
 from dataclasses import dataclass, field
 
 NODE_TYPES = frozenset({
+    "raw",
     "fact",
     "action",
     "todo",
@@ -20,7 +21,14 @@ NODE_TYPES = frozenset({
 
 # Types that sit on the commitment ladder or describe the world, and therefore
 # must declare whether they fall inside the user's personal sphere.
+# 'raw' is excluded on purpose: nothing has read the chunk closely enough to
+# answer the question, and guessing False would be a claim the ingest never made.
 TYPES_REQUIRING_ABOUT_USER = frozenset({"fact", "action", "todo", "intention"})
+
+# Unread source text: a section of a document, chunked mechanically and indexed
+# so it can surface, not because anything has judged what it says. A raw node is
+# a standing invitation to be replaced by the claims it actually contains.
+TYPE_RAW = "raw"
 
 # Superseding these would hide them from retrieval, which filters on
 # superseded_by IS NULL. An idea stays valid however much work it spawns.

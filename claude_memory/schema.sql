@@ -7,8 +7,8 @@ CREATE TABLE IF NOT EXISTS nodes (
     id              TEXT PRIMARY KEY,
     title           TEXT,
     summary         TEXT NOT NULL,          -- immutable
-    type            TEXT NOT NULL,          -- fact|action|todo|intention|idea|
-                                            -- meta|conv-pref|code-pref
+    type            TEXT NOT NULL,          -- raw|fact|action|todo|intention|
+                                            -- idea|meta|conv-pref|code-pref
     about_user      INTEGER,                -- fact/action/todo/intention only
     scope           TEXT NOT NULL DEFAULT 'global',
     window_start    TEXT,

@@ -12,6 +12,12 @@ RRF_K = 60
 CANDIDATE_K = 200
 FINAL_K = 10
 
+# Raw chunks are unread source text competing against claims someone actually
+# judged. They should still surface — that is the whole point of indexing them —
+# but a refined node on the same topic should win. Multiplicative, so a raw hit
+# that dominates on both halves can still outrank a weak refined one.
+RAW_DEMOTION = 0.6
+
 LEAD_TIME_DAYS = 30
 RECENT_N = 3
 
@@ -56,6 +62,7 @@ def search(
     scope: str | None = None,
     include_superseded: bool = False,
     parent: str | None = None,
+    about_user: bool | None = None,
 ) -> list[dict[str, Any]]:
     """Hybrid retrieval fused by Reciprocal Rank Fusion.
 
@@ -73,6 +80,15 @@ def search(
     parent_params: tuple[Any, ...] = () if parent is None else (parent,)
 
     superseded_clause = "" if include_superseded else "AND n.superseded_by IS NULL"
+
+    # NULL is the world stratum, not a third one: 'raw' and the preference types
+    # never declare about_user, and filtering on `= 0` would drop them from both
+    # populations and so from stratified retrieval entirely.
+    about_clause = ""
+    if about_user is True:
+        about_clause = "AND n.about_user = 1"
+    elif about_user is False:
+        about_clause = "AND COALESCE(n.about_user, 0) = 0"
 
     query_vector = embed.serialize(embed.encode_one(query))
 
@@ -94,8 +110,9 @@ def search(
                n.window_start, n.window_end, n.stale,
                lexical.rank  AS lexical_rank,
                semantic.rank AS semantic_rank,
-               COALESCE(1.0 / (? + lexical.rank), 0)
-             + COALESCE(1.0 / (? + semantic.rank), 0) AS score
+               (CASE WHEN n.type = 'raw' THEN ? ELSE 1.0 END)
+             * (COALESCE(1.0 / (? + lexical.rank), 0)
+              + COALESCE(1.0 / (? + semantic.rank), 0)) AS score
         FROM nodes n
         LEFT JOIN lexical  ON lexical.node_rowid  = n.rowid
         LEFT JOIN semantic ON semantic.node_rowid = n.rowid
@@ -103,16 +120,61 @@ def search(
           AND n.scope IN ({scope_placeholders})
           AND {parent_clause}
           {superseded_clause}
+          {about_clause}
         ORDER BY score DESC
         LIMIT ?
     """
 
     rows = connection.execute(
         sql,
-        (match_expression, CANDIDATE_K, query_vector, CANDIDATE_K, RRF_K, RRF_K,
+        (match_expression, CANDIDATE_K, query_vector, CANDIDATE_K,
+         RAW_DEMOTION, RRF_K, RRF_K,
          *scopes, *parent_params, limit),
     ).fetchall()
     return [dict(row) for row in rows]
+
+
+def search_stratified(
+    connection: sqlite3.Connection,
+    query: str,
+    personal_limit: int = 3,
+    world_limit: int = 3,
+    scope: str | None = None,
+) -> list[dict[str, Any]]:
+    """Retrieve personal and world nodes as separate populations.
+
+    A single ranked list lets one population starve the other: with ~500 wiki
+    nodes against a handful of personal ones, "where am I moving to next month"
+    returned four unrelated wiki sections and pushed the apartment and move-in
+    facts past rank 20. Personal facts are few and disproportionately important,
+    so they get guaranteed slots rather than competing on raw score.
+    """
+    personal = search(connection, query, limit=personal_limit, scope=scope,
+                      about_user=True)
+    world = search(connection, query, limit=world_limit, scope=scope,
+                   about_user=False)
+    return sorted([*personal, *world], key=lambda hit: hit["score"], reverse=True)
+
+
+REFINE_HINT = (
+    "Some hits above are type 'raw': unread document text, chunked on headings "
+    "and indexed without anyone judging what it claims. If one of them actually "
+    "answered the question, that is worth keeping properly — extract the claim "
+    "as a typed node and supersede the raw chunk with it "
+    "(op='supersede', supersedes=<raw id>). Only do this for chunks you read and "
+    "used; leaving the rest raw is the correct outcome."
+)
+
+
+def refine_hint(hits: list[dict[str, Any]]) -> str:
+    """Prompt the agent to upgrade raw chunks it just found useful.
+
+    Refinement is driven by retrieval rather than by a background pass: a chunk
+    is worth a model's attention exactly when a real question has pulled it up,
+    and at that moment the agent has the question in hand to extract against.
+    """
+    raw_ids = [hit["id"] for hit in hits if hit["type"] == "raw"]
+    return f"{REFINE_HINT} Raw hits: {', '.join(raw_ids)}." if raw_ids else ""
 
 
 def should_retrieve(message: str, min_content_words: int = MIN_CONTENT_WORDS) -> bool:

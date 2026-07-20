@@ -23,6 +23,7 @@ recall. Redundancy is handled by abstraction nodes, not another tier.
 
 | Type | Meaning | Time |
 |---|---|---|
+| `raw` | Unread source text — a document section, chunked and indexed but not judged | — |
 | `fact` | A proposition true **at least since** `window_start` | `[window_start, window_end]`; null end = unknown |
 | `action` | Someone did something — user, agent, or third party | `window_start` (= end, or a range if durative) |
 | `todo` | Something necessary or decided — a todo list or calendar item | `window_end` = due date, if any |
@@ -31,6 +32,25 @@ recall. Redundancy is handled by abstraction nodes, not another tier.
 | `meta` | How this memory system works | — |
 | `conv-pref` | How the agent should communicate or behave | — |
 | `code-pref` | A coding constraint or convention | — |
+
+### `raw`, and refinement on demand
+
+Ingesting a wiki page cannot produce facts. A markdown section is prose that may
+contain zero claims or twenty, and typing it as a `fact` about the world asserts
+something the ingest never checked. So sections land as `raw`: chunked on headings,
+embedded, searchable — and explicitly *not* believed. `raw` carries no `about_user`,
+because nothing has read it closely enough to answer that.
+
+Raw nodes are scored at `0.6 ×` the fused RRF score, so they surface but yield to any
+refined node covering the same ground. When one does surface and an agent actually reads
+it, the search result carries a hint: extract the claims and `supersede` the chunk with
+them. Refinement is therefore paid for by attention already spent on a real question,
+rather than by a batch LLM pass over 500 chunks that no one will ever ask about. The
+corpus sharpens along the paths that get used.
+
+Because supersession pointers would be destroyed by re-ingest — which deletes and rewrites
+a file's derived nodes — they are carried across by section id, which is stable as long as
+the heading survives. A rename loses the link but never the refined node.
 
 A `fact` asserts truth *from* `window_start`, **not** present truth. So a fact node is
 never falsified by the passage of time — only superseded. "Fizz rebranded to Mine in
