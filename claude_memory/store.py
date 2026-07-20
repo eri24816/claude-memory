@@ -7,9 +7,12 @@ node_revisions.
 
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 import uuid
+from functools import lru_cache
+from pathlib import Path
 from typing import Any, Iterable
 
 from . import embed
@@ -189,6 +192,76 @@ def _supersede(
     return new_id
 
 
+def _is_authored_message(message: dict) -> bool:
+    """True for something Eric actually typed, not a tool_result echoed back as
+    a user-role turn -- the Anthropic API's convention for feeding tool output
+    back into the conversation. A transcript's most recent role=user event is
+    very often the harness's own tool-result turn, not Eric's last message; a
+    locator pointing at a raw tool_result blob is far less useful than one
+    pointing at what he actually asked.
+    """
+    content = message.get("content")
+    if isinstance(content, str):
+        return bool(content.strip())
+    if isinstance(content, list):
+        return any(
+            isinstance(block, dict) and block.get("type") == "text"
+            for block in content
+        )
+    return False
+
+
+@lru_cache(maxsize=1)
+def _live_transcript_uuid() -> str | None:
+    """Best-effort: the most recent Eric-authored message's uuid in the live
+    transcript.
+
+    locator's default for a node whose source_session is this live session --
+    an agent capturing something during the conversation that produced it gets
+    a jump-to-context anchor with zero extra effort, the same way
+    source_session itself defaults. Anchors to the most recent message Eric
+    actually typed, since that is usually what a capture is written in
+    response to; content established across several turns only gets an
+    approximate anchor, which still beats no anchor in a transcript that can
+    run to thousands of lines.
+
+    Cached for the process: remember() may write several nodes in one batch,
+    and this reads a whole transcript file that only grows across a session --
+    re-reading it per node would be real, avoidable cost. A fresh process (the
+    normal case: every CLI invocation) gets a fresh read, so nothing goes stale.
+
+    Best-effort by design, like source_session's default: any failure -- no
+    session id, transcript not found, unreadable -- returns None rather than
+    raising. A missing locator is a minor loss, not a reason to fail the write.
+    """
+    session_id = os.environ.get("CLAUDE_CODE_SESSION_ID")
+    if not session_id:
+        return None
+    projects_dir = Path(os.environ.get(
+        "CLAUDE_MEMORY_TRANSCRIPTS_DIR", str(Path.home() / ".claude" / "projects")
+    ))
+    try:
+        matches = list(projects_dir.glob(f"**/{session_id}.jsonl"))
+        if not matches:
+            return None
+        lines = matches[0].read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return None
+
+    for line in reversed(lines):
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        message = event.get("message")
+        if (
+            isinstance(message, dict) and message.get("role") == "user"
+            and event.get("uuid") and _is_authored_message(message)
+        ):
+            return event["uuid"]
+    return None
+
+
 def _node_from_spec(connection: sqlite3.Connection, spec: dict[str, Any]) -> Node:
     fields = {
         key: value
@@ -198,6 +271,7 @@ def _node_from_spec(connection: sqlite3.Connection, spec: dict[str, Any]) -> Nod
     if fields.get("title"):
         fields["title"] = fields["title"].strip()
     is_original = fields.get("origin", "original") == "original"
+    live_session = os.environ.get("CLAUDE_CODE_SESSION_ID")
     if is_original and fields.get("source_session") is None:
         # Only for origin='original': a derived (ingested) node's provenance is
         # the file it came from (derived_from/locator), not whichever session
@@ -210,7 +284,21 @@ def _node_from_spec(connection: sqlite3.Connection, spec: dict[str, Any]) -> Nod
         # in the store had a NULL source_session until this fix, because the
         # agent has no reason to type its own session id by hand on every
         # write, and mostly didn't know it could.
-        fields["source_session"] = os.environ.get("CLAUDE_CODE_SESSION_ID")
+        fields["source_session"] = live_session
+
+    if (
+        is_original and fields.get("locator") is None and live_session
+        and fields.get("source_session") == live_session
+    ):
+        # Only when source_session resolved to THIS live session -- explicit or
+        # defaulted, doesn't matter which. A backfill that names some other
+        # session's content but omits locator must not get "wherever this
+        # process happens to be right now" stamped on it; that would point at
+        # the wrong transcript entirely, worse than no locator at all.
+        live_uuid = _live_transcript_uuid()
+        if live_uuid:
+            fields["locator"] = live_uuid
+
     identifier = spec.get("id") or slugify(fields.get("title") or spec["summary"])
     return Node(id=_unique_id(connection, identifier), **fields)
 

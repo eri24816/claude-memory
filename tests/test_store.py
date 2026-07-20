@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from claude_memory import db, retrieval, store
@@ -243,6 +245,132 @@ def test_source_session_null_without_the_env_var(connection, monkeypatch):
         "SELECT source_session FROM nodes WHERE id = ?", (written,)
     ).fetchone()
     assert row["source_session"] is None
+
+
+def _write_transcript(directory, session_id, events):
+    """A minimal fake transcript: one JSON object per line, newest last."""
+    path = directory / f"{session_id}.jsonl"
+    path.write_text(
+        "\n".join(json.dumps(event) for event in events) + "\n", encoding="utf-8"
+    )
+    return path
+
+
+@pytest.fixture
+def transcripts_dir(tmp_path, monkeypatch):
+    directory = tmp_path / "projects"
+    directory.mkdir()
+    monkeypatch.setenv("CLAUDE_MEMORY_TRANSCRIPTS_DIR", str(directory))
+    store._live_transcript_uuid.cache_clear()
+    yield directory
+    store._live_transcript_uuid.cache_clear()
+
+
+def test_locator_defaults_to_the_most_recent_user_turn(connection, monkeypatch, transcripts_dir):
+    """Regression target: the whole point is zero effort for the normal case --
+    a live capture about the conversation that is currently producing it."""
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "live-session")
+    _write_transcript(transcripts_dir, "live-session", [
+        {"uuid": "u1", "message": {"role": "user", "content": "first question"}},
+        {"uuid": "a1", "message": {"role": "assistant", "content": [{"type": "text", "text": "answer"}]}},
+        {"uuid": "u2", "message": {"role": "user", "content": "second question"}},
+        {"uuid": "a2", "message": {"role": "assistant", "content": [{"type": "text", "text": "answer"}]}},
+    ])
+
+    written = store.remember(connection, [UMICH])["written"][0]
+    row = connection.execute(
+        "SELECT locator FROM nodes WHERE id = ?", (written,)
+    ).fetchone()
+    assert row["locator"] == "u2"
+
+
+def test_locator_skips_a_trailing_tool_result_turn(connection, monkeypatch, transcripts_dir):
+    """Regression: caught live against this project's own real transcript. A
+    tool_result is sent back to the API as a role=user turn, so "most recent
+    user-role event" is very often the harness's own tool output, not the last
+    thing Eric actually typed -- landing a locator there is far less useful."""
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "live-session")
+    _write_transcript(transcripts_dir, "live-session", [
+        {"uuid": "u1", "message": {"role": "user", "content": "what Eric actually asked"}},
+        {"uuid": "a1", "message": {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "t1", "name": "Bash", "input": {}},
+        ]}},
+        {"uuid": "u2", "message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "t1", "content": "command output"},
+        ]}},
+    ])
+
+    written = store.remember(connection, [UMICH])["written"][0]
+    row = connection.execute(
+        "SELECT locator FROM nodes WHERE id = ?", (written,)
+    ).fetchone()
+    assert row["locator"] == "u1"
+
+
+def test_locator_not_defaulted_when_source_session_points_elsewhere(
+    connection, monkeypatch, transcripts_dir
+):
+    """The exact bug this guard exists to prevent: a backfill naming a
+    different session's content must not get "wherever this process happens
+    to be right now" stamped on as its locator -- that would point at the
+    wrong transcript entirely."""
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "live-session")
+    _write_transcript(transcripts_dir, "live-session", [
+        {"uuid": "u1", "message": {"role": "user"}},
+    ])
+
+    written = store.remember(
+        connection, [{**UMICH, "source_session": "some-other-session"}]
+    )["written"][0]
+    row = connection.execute(
+        "SELECT locator, source_session FROM nodes WHERE id = ?", (written,)
+    ).fetchone()
+    assert row["source_session"] == "some-other-session"
+    assert row["locator"] is None
+
+
+def test_locator_explicit_value_wins(connection, monkeypatch, transcripts_dir):
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "live-session")
+    _write_transcript(transcripts_dir, "live-session", [
+        {"uuid": "u1", "message": {"role": "user"}},
+    ])
+
+    written = store.remember(
+        connection, [{**UMICH, "locator": "already-known-uuid"}]
+    )["written"][0]
+    row = connection.execute(
+        "SELECT locator FROM nodes WHERE id = ?", (written,)
+    ).fetchone()
+    assert row["locator"] == "already-known-uuid"
+
+
+def test_locator_not_defaulted_for_derived_nodes(connection, monkeypatch, transcripts_dir):
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "live-session")
+    _write_transcript(transcripts_dir, "live-session", [
+        {"uuid": "u1", "message": {"role": "user"}},
+    ])
+
+    written = store.remember(connection, [{
+        "title": "Ingested wiki section", "summary": "Some wiki content.",
+        "type": "raw", "origin": "derived", "derived_from": "wiki/page.md",
+    }])["written"][0]
+    row = connection.execute(
+        "SELECT locator FROM nodes WHERE id = ?", (written,)
+    ).fetchone()
+    assert row["locator"] is None
+
+
+def test_locator_gracefully_absent_without_a_matching_transcript(
+    connection, monkeypatch, transcripts_dir
+):
+    """No transcript file for this session id -- e.g. a hook-driven write in
+    a test harness, or a transcript that has not synced to disk yet."""
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "session-with-no-file")
+    written = store.remember(connection, [UMICH])["written"][0]
+    row = connection.execute(
+        "SELECT locator FROM nodes WHERE id = ?", (written,)
+    ).fetchone()
+    assert row["locator"] is None
 
 
 def test_edges_require_existing_target(connection):

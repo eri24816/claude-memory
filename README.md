@@ -252,7 +252,16 @@ otherwise violate silently:
 | `nodes_fts`, `nodes_vec` | **Yes — disposable.** Reparse + re-embed from `nodes` |
 
 - **Never index raw transcripts** — huge and mostly noise. They stay grep-only, reached
-  via `source_session`.
+  via `source_session` (which session) and `locator` (which event's `uuid` within it) —
+  the same two-column pattern wiki nodes already use as `derived_from`/`locator`, just
+  pointing at a transcript instead of a file. Both default automatically for an
+  `origin='original'` node written live: `CLAUDE_CODE_SESSION_ID` gives `source_session`
+  for free, and `locator` defaults to the most recent message Eric actually typed —
+  skipping tool-result turns, which the Anthropic API also encodes as `role=user` and
+  which are almost always the literal most recent one, not what he asked. Both defaults
+  apply only when `source_session` actually resolves to the live session, so a retroactive
+  write describing a *different*, past session's content is never stamped with a locator
+  pointing at the wrong transcript.
 - **Path is a locator, never identity** — the wiki lives in iCloudDrive, which produces
   conflict copies and renames.
 - Backup by daily `VACUUM INTO` snapshot, not git (a `.db` in git is an undiffable blob).
