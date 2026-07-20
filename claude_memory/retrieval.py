@@ -15,13 +15,38 @@ FINAL_K = 10
 LEAD_TIME_DAYS = 30
 RECENT_N = 3
 
+# Trivial acknowledgements ("ok", "yes", "do it") yield 0-1 content words;
+# a real question like "what are my roommates called" yields 2. The boundary
+# sits at 2, not 3, or substantive short questions are silently skipped.
+MIN_CONTENT_WORDS = 2
+
 _TOKEN_PATTERN = re.compile(r"[A-Za-z0-9_]+")
+
+STOPWORDS = frozenset({
+    "a", "an", "and", "are", "as", "at", "be", "but", "by", "can", "do", "for",
+    "from", "how", "i", "if", "in", "is", "it", "me", "my", "no", "not", "of",
+    "ok", "okay", "on", "or", "so", "that", "the", "then", "this", "to", "up",
+    "was", "we", "what", "when", "where", "why", "yes", "you", "your",
+})
+
+
+def content_words(text: str) -> list[str]:
+    tokens = [token.lower() for token in _TOKEN_PATTERN.findall(text)]
+    return [token for token in tokens if token not in STOPWORDS]
 
 
 def _fts_query(text: str) -> str:
-    """Quote each token so punctuation cannot break FTS5 MATCH syntax."""
-    tokens = _TOKEN_PATTERN.findall(text)
-    return " OR ".join(f'"{token}"' for token in tokens)
+    """Build an FTS5 MATCH expression from the query's content words.
+
+    Tokens are OR-ed, so stopwords must be dropped: a query like "where am I
+    moving to next month" would otherwise match anything containing "to" or
+    "month" and hand those hits rank 1, poisoning the RRF fusion with noise
+    that outranks the genuinely relevant semantic matches.
+
+    Quoting each token keeps punctuation from breaking MATCH syntax.
+    """
+    tokens = [token.lower() for token in _TOKEN_PATTERN.findall(text)]
+    return " OR ".join(f'"{token}"' for token in content_words(text) or tokens)
 
 
 def search(
@@ -67,6 +92,8 @@ def search(
         )
         SELECT n.id, n.title, n.summary, n.type, n.scope, n.about_user,
                n.window_start, n.window_end, n.stale,
+               lexical.rank  AS lexical_rank,
+               semantic.rank AS semantic_rank,
                COALESCE(1.0 / (? + lexical.rank), 0)
              + COALESCE(1.0 / (? + semantic.rank), 0) AS score
         FROM nodes n
@@ -86,6 +113,17 @@ def search(
          *scopes, *parent_params, limit),
     ).fetchall()
     return [dict(row) for row in rows]
+
+
+def should_retrieve(message: str, min_content_words: int = MIN_CONTENT_WORDS) -> bool:
+    """Gate per-message auto-retrieval on query shape, not on score.
+
+    RRF scores are not normalised — with rrf_k = 60 everything lands in a narrow
+    band and there is no absolute meaning to "relevant enough". Counting content
+    words needs no calibration and handles the "ok" / "yes" case that motivated
+    the gate.
+    """
+    return len(content_words(message)) >= min_content_words
 
 
 def assemble_t1(

@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>claude-memory inspector</title>
+<style>
+  :root {
+    --ground: #f7f8fa;
+    --surface: #ffffff;
+    --ink: #14181d;
+    --ink-soft: #56606c;
+    --ink-faint: #8b95a1;
+    --rule: #e0e4e9;
+    --rule-soft: #eef1f4;
+    --hot: #b4530f;
+    --hot-wash: #fbf0e7;
+    --cold: #35618f;
+    --cold-wash: #ebf1f7;
+    --mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+    --sans: ui-sans-serif, system-ui, "Segoe UI", sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ground: #101317; --surface: #171b21; --ink: #e6eaef;
+      --ink-soft: #a3aeba; --ink-faint: #76818d;
+      --rule: #2a313a; --rule-soft: #202730;
+      --hot: #e0873f; --hot-wash: #241a11;
+      --cold: #7faad6; --cold-wash: #141c25;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--ground); color: var(--ink);
+    font-family: var(--sans); font-size: 14px; line-height: 1.5;
+  }
+  header {
+    display: flex; align-items: baseline; gap: 1rem; flex-wrap: wrap;
+    padding: 1rem 1.5rem; border-bottom: 1px solid var(--rule);
+    background: var(--surface);
+  }
+  h1 { font-size: 1rem; margin: 0; font-weight: 650; letter-spacing: -0.01em; }
+  .dbpath { font-family: var(--mono); font-size: 0.72rem; color: var(--ink-faint); }
+  .counts { margin-left: auto; display: flex; gap: 1rem; font-size: 0.78rem; color: var(--ink-soft); }
+  .counts b { font-variant-numeric: tabular-nums; color: var(--ink); }
+
+  nav { display: flex; gap: 0.25rem; padding: 0 1.5rem; border-bottom: 1px solid var(--rule); background: var(--surface); }
+  nav button {
+    background: none; border: none; border-bottom: 2px solid transparent;
+    padding: 0.7rem 0.9rem; font: inherit; font-size: 0.86rem;
+    color: var(--ink-soft); cursor: pointer;
+  }
+  nav button:hover { color: var(--ink); }
+  nav button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--hot); font-weight: 600; }
+
+  main { padding: 1.25rem 1.5rem 3rem; }
+  section[hidden] { display: none; }
+
+  .controls { display: flex; gap: 0.6rem; flex-wrap: wrap; align-items: center; margin-bottom: 1rem; }
+  input, select {
+    font: inherit; font-size: 0.86rem; padding: 0.4rem 0.55rem;
+    background: var(--surface); color: var(--ink);
+    border: 1px solid var(--rule); border-radius: 4px;
+  }
+  input[type="search"], input.wide { min-width: 22rem; flex: 1; }
+  input:focus, select:focus { outline: 2px solid var(--cold); outline-offset: -1px; }
+  label { font-size: 0.75rem; color: var(--ink-faint); text-transform: uppercase; letter-spacing: 0.06em; }
+
+  .scroll { overflow-x: auto; border: 1px solid var(--rule); border-radius: 6px; background: var(--surface); }
+  table { width: 100%; border-collapse: collapse; font-size: 0.84rem; }
+  th {
+    text-align: left; font-size: 0.68rem; text-transform: uppercase;
+    letter-spacing: 0.08em; color: var(--ink-faint); font-weight: 600;
+    padding: 0.6rem 0.8rem; border-bottom: 1px solid var(--rule); white-space: nowrap;
+  }
+  td { padding: 0.55rem 0.8rem; border-bottom: 1px solid var(--rule-soft); vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  tbody tr:hover { background: var(--rule-soft); }
+  .num { font-variant-numeric: tabular-nums; font-family: var(--mono); font-size: 0.78rem; white-space: nowrap; }
+  .muted { color: var(--ink-faint); }
+
+  .chip {
+    display: inline-block; font-family: var(--mono); font-size: 0.68rem;
+    padding: 0.1em 0.45em; border-radius: 3px; white-space: nowrap;
+    border: 1px solid var(--rule); color: var(--ink-soft);
+  }
+  .chip.fact, .chip.action, .chip.todo, .chip.intention { border-color: var(--hot); color: var(--hot); background: var(--hot-wash); }
+  .chip.idea, .chip.meta, .chip["conv-pref"] { border-color: var(--cold); color: var(--cold); background: var(--cold-wash); }
+  .chip.off { opacity: 0.55; }
+
+  .flag { font-family: var(--mono); font-size: 0.68rem; color: var(--hot); }
+
+  pre.block {
+    font-family: var(--mono); font-size: 0.78rem; line-height: 1.6;
+    background: var(--surface); border: 1px solid var(--rule); border-radius: 6px;
+    padding: 1rem; overflow-x: auto; white-space: pre-wrap; margin: 0;
+  }
+  .meter { display: flex; align-items: center; gap: 0.75rem; margin: 0.75rem 0 1rem; font-size: 0.8rem; }
+  .bar { flex: 1; max-width: 26rem; height: 6px; background: var(--rule); border-radius: 3px; overflow: hidden; }
+  .bar span { display: block; height: 100%; background: var(--cold); }
+  .bar span.over { background: var(--hot); }
+
+  .note {
+    font-size: 0.8rem; color: var(--ink-soft); background: var(--cold-wash);
+    border-left: 2px solid var(--cold); padding: 0.6rem 0.9rem; margin-bottom: 1rem;
+  }
+  .verdict { font-weight: 650; }
+  .verdict.no { color: var(--hot); }
+  .empty { padding: 2rem; text-align: center; color: var(--ink-faint); font-size: 0.86rem; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>claude-memory</h1>
+  <span class="dbpath" id="dbpath"></span>
+  <div class="counts" id="counts"></div>
+</header>
+
+<nav>
+  <button data-tab="nodes" aria-selected="true">Nodes</button>
+  <button data-tab="t1" aria-selected="false">Autoloaded (T1)</button>
+  <button data-tab="auto" aria-selected="false">Per-message</button>
+  <button data-tab="active" aria-selected="false">Active search</button>
+</nav>
+
+<main>
+  <section id="tab-nodes">
+    <div class="controls">
+      <select id="f-type"><option value="">all types</option></select>
+      <select id="f-scope"><option value="">all scopes</option></select>
+      <select id="f-about">
+        <option value="">about_user: any</option>
+        <option value="true">about_user: true</option>
+        <option value="false">about_user: false</option>
+      </select>
+      <select id="f-state">
+        <option value="all">all states</option>
+        <option value="current">current</option>
+        <option value="stale">stale</option>
+        <option value="superseded">superseded</option>
+      </select>
+      <input type="search" id="f-q" placeholder="filter text…">
+    </div>
+    <div class="scroll"><table>
+      <thead><tr>
+        <th>Type</th><th>Summary</th><th>Scope</th><th>About</th>
+        <th>Window</th><th>State</th>
+      </tr></thead>
+      <tbody id="nodes-body"></tbody>
+    </table></div>
+  </section>
+
+  <section id="tab-t1" hidden>
+    <div class="controls">
+      <label for="t1-scope">Project scope</label>
+      <select id="t1-scope"><option value="">global only</option></select>
+    </div>
+    <div class="meter">
+      <span id="t1-count" class="num"></span>
+      <div class="bar"><span id="t1-bar"></span></div>
+      <span class="muted">budget 8000 chars</span>
+    </div>
+    <pre class="block" id="t1-block"></pre>
+  </section>
+
+  <section id="tab-auto" hidden>
+    <div class="note">
+      Simulates the <code>UserPromptSubmit</code> path before the hook is wired.
+      The gate counts content words rather than thresholding the score — RRF
+      scores are unnormalised and cluster in a narrow band, so there is no
+      absolute cutoff to calibrate against.
+    </div>
+    <div class="controls">
+      <input class="wide" id="auto-msg" placeholder="type a user message, e.g. “where am I moving to?”">
+      <select id="auto-scope"><option value="">global only</option></select>
+    </div>
+    <p id="auto-verdict"></p>
+    <div class="scroll"><table>
+      <thead><tr><th>Score</th><th>BM25</th><th>Vector</th><th>Type</th><th>Summary</th></tr></thead>
+      <tbody id="auto-body"></tbody>
+    </table></div>
+  </section>
+
+  <section id="tab-active" hidden>
+    <div class="note">
+      Agent-initiated search. <b>BM25</b> and <b>Vector</b> are per-index ranks —
+      a hit found by only one index scores about 0.016, one ranked first by both
+      about 0.033.
+    </div>
+    <div class="controls">
+      <input class="wide" id="q-input" placeholder="search query…">
+      <select id="q-scope"><option value="">global only</option></select>
+    </div>
+    <div class="scroll"><table>
+      <thead><tr><th>Score</th><th>BM25</th><th>Vector</th><th>Type</th><th>Summary</th></tr></thead>
+      <tbody id="q-body"></tbody>
+    </table></div>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+const debounce = (fn, ms = 180) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
+const get = async (path, params) => {
+  const url = new URL(path, location.origin);
+  Object.entries(params || {}).forEach(([k, v]) => { if (v) url.searchParams.set(k, v); });
+  return (await fetch(url)).json();
+};
+
+function windowText(node) {
+  if (!node.window_start && !node.window_end) return "";
+  return `${node.window_start || ""} … ${node.window_end || ""}`;
+}
+
+function stateText(node) {
+  if (node.superseded_by) return `<span class="flag">superseded</span>`;
+  if (node.stale) return `<span class="flag">stale</span>`;
+  return `<span class="muted">current</span>`;
+}
+
+function hitRows(hits) {
+  if (!hits.length) return `<tr><td colspan="5" class="empty">No matches.</td></tr>`;
+  return hits.map((hit) => `
+    <tr>
+      <td class="num">${hit.score.toFixed(4)}</td>
+      <td class="num ${hit.lexical_rank ? "" : "muted"}">${hit.lexical_rank ?? "–"}</td>
+      <td class="num ${hit.semantic_rank ? "" : "muted"}">${hit.semantic_rank ?? "–"}</td>
+      <td><span class="chip ${esc(hit.type)}">${esc(hit.type)}</span></td>
+      <td>${esc(hit.summary)}</td>
+    </tr>`).join("");
+}
+
+async function loadStats() {
+  const data = await get("/api/stats");
+  $("dbpath").textContent = data.db;
+  $("counts").innerHTML = `
+    <span><b>${data.total}</b> nodes</span>
+    <span><b>${data.stale}</b> stale</span>
+    <span><b>${data.superseded}</b> superseded</span>`;
+  for (const type of Object.keys(data.by_type)) {
+    $("f-type").insertAdjacentHTML("beforeend", `<option>${esc(type)}</option>`);
+  }
+  for (const scope of data.scopes) {
+    const option = `<option value="${esc(scope)}">${esc(scope)}</option>`;
+    $("f-scope").insertAdjacentHTML("beforeend", option);
+    if (scope !== "global") {
+      ["t1-scope", "auto-scope", "q-scope"].forEach((id) => $(id).insertAdjacentHTML("beforeend", option));
+    }
+  }
+}
+
+async function loadNodes() {
+  const rows = await get("/api/nodes", {
+    type: $("f-type").value, scope: $("f-scope").value,
+    about_user: $("f-about").value, state: $("f-state").value, q: $("f-q").value,
+  });
+  $("nodes-body").innerHTML = rows.length ? rows.map((node) => `
+    <tr>
+      <td><span class="chip ${esc(node.type)}">${esc(node.type)}</span></td>
+      <td>${esc(node.summary)}</td>
+      <td class="num muted">${esc(node.scope)}</td>
+      <td class="num">${node.about_user === null ? "<span class='muted'>–</span>" : (node.about_user ? "yes" : "<span class='muted'>no</span>")}</td>
+      <td class="num muted">${esc(windowText(node))}</td>
+      <td class="num">${stateText(node)}</td>
+    </tr>`).join("") : `<tr><td colspan="6" class="empty">No nodes match these filters.</td></tr>`;
+}
+
+async function loadT1() {
+  const data = await get("/api/t1", { scope: $("t1-scope").value });
+  $("t1-count").textContent = `${data.characters} chars · ${data.nodes.length} nodes`;
+  const bar = $("t1-bar");
+  const ratio = Math.min(1, data.characters / data.budget);
+  bar.style.width = `${ratio * 100}%`;
+  bar.classList.toggle("over", data.characters > data.budget);
+  $("t1-block").textContent = data.block || "Nothing would be autoloaded.";
+}
+
+async function loadAuto() {
+  const message = $("auto-msg").value.trim();
+  if (!message) { $("auto-verdict").textContent = ""; $("auto-body").innerHTML = ""; return; }
+  const data = await get("/api/auto", { message, scope: $("auto-scope").value });
+  $("auto-verdict").innerHTML = data.would_retrieve
+    ? `<span class="verdict">Would inject</span> <span class="muted">— ${esc(data.reason)}</span>`
+    : `<span class="verdict no">Would not inject</span> <span class="muted">— ${esc(data.reason)}</span>`;
+  $("auto-body").innerHTML = hitRows(data.hits);
+}
+
+async function loadActive() {
+  const query = $("q-input").value.trim();
+  if (!query) { $("q-body").innerHTML = ""; return; }
+  $("q-body").innerHTML = hitRows(await get("/api/search", { q: query, scope: $("q-scope").value }));
+}
+
+document.querySelectorAll("nav button").forEach((button) => {
+  button.addEventListener("click", () => {
+    document.querySelectorAll("nav button").forEach((other) => other.setAttribute("aria-selected", String(other === button)));
+    ["nodes", "t1", "auto", "active"].forEach((name) => { $(`tab-${name}`).hidden = name !== button.dataset.tab; });
+    if (button.dataset.tab === "t1") loadT1();
+  });
+});
+
+["f-type", "f-scope", "f-about", "f-state"].forEach((id) => $(id).addEventListener("change", loadNodes));
+$("f-q").addEventListener("input", debounce(loadNodes));
+$("t1-scope").addEventListener("change", loadT1);
+$("auto-msg").addEventListener("input", debounce(loadAuto, 300));
+$("auto-scope").addEventListener("change", loadAuto);
+$("q-input").addEventListener("input", debounce(loadActive, 300));
+$("q-scope").addEventListener("change", loadActive);
+
+loadStats().then(loadNodes);
+</script>
+</body>
+</html>

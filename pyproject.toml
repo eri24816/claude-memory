@@ -10,6 +10,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
+server = ["fastapi>=0.110", "uvicorn>=0.27"]
 
 [build-system]
 requires = ["setuptools>=68"]
@@ -19,7 +20,7 @@ build-backend = "setuptools.build_meta"
 packages = ["claude_memory"]
 
 [tool.setuptools.package-data]
-claude_memory = ["schema.sql"]
+claude_memory = ["schema.sql", "static/*.html"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
