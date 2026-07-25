@@ -232,3 +232,61 @@ def test_rollback_restores_the_pre_migration_store(v0_store):
     assert "summary" in columns and "claim" not in columns
     assert restored.execute("SELECT COUNT(*) FROM nodes").fetchone()[0] == len(V0_NODES)
     restored.close()
+
+
+def test_both_entry_hooks_announce_an_unmigrated_store(v0_store):
+    """A notice only at session start is not enough: a session already running
+    when the store falls behind would go on treating memory as empty, which is
+    indistinguishable from a user who has never told it anything.
+
+    Session start and user prompt between them cover every path into a turn."""
+    from claude_memory import hooks
+
+    connection = _connect(v0_store)
+
+    start = hooks.build_session_start_context({"cwd": "/tmp"}, connection)
+    prompt = hooks.build_user_prompt_context({"prompt": "ok"}, connection)
+
+    for block in (start, prompt):
+        assert "MEMORY IS NOT WORKING" in block
+        assert "Ask the user whether to migrate" in block
+        assert str(v0_store) in block, "must name the store it actually found"
+
+
+def test_the_notice_survives_the_triviality_gate(v0_store):
+    """`should_retrieve` exists to keep irrelevant nodes out of 'ok' and 'yes'.
+    A broken store is not a relevance question -- it is equally true either way."""
+    from claude_memory import hooks
+
+    connection = _connect(v0_store)
+    assert hooks.build_user_prompt_context({"prompt": "ok"}, connection)
+
+
+def test_stop_never_carries_the_notice(v0_store):
+    """Stop's additionalContext forces the turn to continue, so anything
+    unconditional here makes the conversation unable to end. UserPromptSubmit
+    already fires on every message, so Stop has nothing to add.
+
+    The maintenance reminder is suppressed too: telling an agent to capture what
+    it learned is noise when every write would raise."""
+    from claude_memory import hooks
+
+    connection = _connect(v0_store)
+    stops = [hooks.build_stop_context({"session_id": "s"}, connection)
+             for _ in range(hooks.MAINTAIN_EVERY * 2)]
+    assert not any(stops)
+
+
+def test_a_migrated_store_says_nothing(v0_store):
+    from claude_memory import hooks
+
+    connection = _connect(v0_store)
+    migrate.run(connection, v0_store)
+    migrate.set_claims(connection, [
+        {"id": "apartment", "claim": "Eric's apartment is 2442 Leslie Circle"},
+        {"id": "umich", "claim": "Eric is enrolled in Michigan MSCSE"},
+    ])
+    assert hooks.migration_notice(connection) == ""
+    assert "MEMORY IS NOT WORKING" not in hooks.build_session_start_context(
+        {"cwd": "/tmp"}, connection
+    )

@@ -49,16 +49,48 @@ MAINTENANCE_REMINDER = (
     "now. If none do, say so in one line and continue."
 )
 
-# Prepended to T1 when the store predates the running code. The alternative was
-# expecting the user to know a magic phrase; this reaches every session of every
-# user automatically, and makes "migrate to v0.1.0" a confirmation rather than
-# something they had to have read a README to discover.
+# Emitted by every hook while the store predates the running code, because the
+# failure is total: T1 has nothing to render, retrieval returns nothing, and
+# writes raise. Saying it once at session start is not enough -- a session that
+# starts before anyone reads the notice will go on silently behaving as though
+# memory is empty, which is indistinguishable from a user who has never told it
+# anything.
+#
+# It names the paths rather than a command alone: the agent may be running in
+# any directory, and "run migrate" is not actionable if it cannot find the repo.
+#
+# It asks rather than acts. Migration rewrites the user's most irreplaceable
+# data and wants other sessions stopped first; that is a decision, not a chore.
 MIGRATION_NOTICE = (
-    "MEMORY NEEDS MIGRATION: the store is at schema v{found}, this code expects "
-    "v{expected}. Reads and writes are unreliable until it is upgraded. Run "
-    "`python -m claude_memory migrate` and follow MIGRATION-0.1.0.md in the "
-    "claude-memory repo."
+    "MEMORY IS NOT WORKING. The store at {db} is schema v{found}; this code "
+    "expects v{expected}. Until it is migrated, retrieval returns nothing and "
+    "every write fails -- so treat memory as unavailable rather than empty, and "
+    "do not conclude that anything is 'not in memory'.\n"
+    "Ask the user whether to migrate now. If they agree, follow {doc} "
+    "(it needs other Claude sessions stopped first). If they decline, carry on "
+    "without memory and do not ask again this session."
 )
+
+
+def migration_notice(connection: sqlite3.Connection) -> str:
+    """The notice, or empty if the store is current."""
+    from . import db
+
+    if not db.needs_migration(connection):
+        return ""
+
+    # The file this connection actually opened, not DEFAULT_DB_PATH. An
+    # un-migrated store is by definition still at the old location, so the
+    # configured path names somewhere the data is not -- and a notice that
+    # points at the wrong file is how someone migrates an empty database and
+    # concludes their memory is gone.
+    attached = connection.execute("PRAGMA database_list").fetchone()
+    return MIGRATION_NOTICE.format(
+        db=attached["file"] if attached and attached["file"] else db.DEFAULT_DB_PATH,
+        doc=Path(__file__).resolve().parent.parent / "MIGRATION-0.1.0.md",
+        found=db.user_version(connection),
+        expected=db.SCHEMA_VERSION,
+    )
 
 
 def scope_for_cwd(cwd: str | None) -> str:
@@ -97,15 +129,14 @@ def build_session_start_context(payload: dict, connection: sqlite3.Connection) -
     keeping this symmetric with build_user_prompt_context avoids two shapes
     for the same kind of thing.
     """
-    from . import db, retrieval
+    from . import retrieval
 
-    if db.needs_migration(connection):
+    notice = migration_notice(connection)
+    if notice:
         # Returned alone. A half-converted store renders claims that are still
         # NULL and facts that may already have been deleted, and a stale autoload
         # block that looks normal is worse than none: the agent would act on it.
-        return MIGRATION_NOTICE.format(
-            found=db.user_version(connection), expected=db.SCHEMA_VERSION
-        )
+        return notice
 
     scope = scope_for_cwd(payload.get("cwd") or os.getcwd())
     return retrieval.render_t1(retrieval.assemble_t1(connection, scope=scope))
@@ -118,14 +149,17 @@ def build_user_prompt_context(payload: dict, connection: sqlite3.Connection) -> 
     including "ok" and "yes", and injecting three unrelated nodes into a
     message that needed none is worse than injecting nothing.
     """
-    from . import db, retrieval
+    from . import retrieval
+
+    # Checked before the should_retrieve gate, not after: the gate exists to
+    # avoid injecting irrelevant nodes into "ok" and "yes", but a broken store
+    # is not a relevance question. It is equally true on every message.
+    notice = migration_notice(connection)
+    if notice:
+        return notice
 
     prompt = (payload.get("prompt") or "").strip()
     if not prompt or not retrieval.should_retrieve(prompt):
-        return ""
-    if db.needs_migration(connection):
-        # Silent, unlike session start: the notice has already been delivered
-        # once this session, and repeating it on every message would be noise.
         return ""
 
     scope = scope_for_cwd(payload.get("cwd") or os.getcwd())
@@ -167,6 +201,18 @@ def build_stop_context(payload: dict, connection: sqlite3.Connection) -> str:
     count = _bump_stop_count(connection, session_id)
     if count % MAINTAIN_EVERY != 0:
         return ""
+
+    # The migration notice deliberately does NOT go here. Stop's additionalContext
+    # forces the turn to continue, so anything unconditional makes the
+    # conversation unable to end -- and UserPromptSubmit already fires on every
+    # message, which is every path into a turn. Nothing is lost by leaving Stop
+    # alone, and the failure mode avoided is severe.
+    #
+    # What IS suppressed: the reminder itself, once the store is behind. Telling
+    # an agent to capture what it learned is noise when every write would raise.
+    if migration_notice(connection):
+        return ""
+
     return MAINTENANCE_REMINDER.format(count=count)
 
 
