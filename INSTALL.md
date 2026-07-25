@@ -63,14 +63,26 @@ python -m pip install pysqlite3-binary
 
 ---
 
-## 3. Create your (empty) store
+## 3. Create your (empty) store and settings
 
 ```bash
 python -m claude_memory init
 ```
 
-This creates the SQLite store and applies the schema. By default it lives in the
-repo, beside the preference files:
+This does three things, and re-running it is always safe:
+
+- creates the SQLite store and applies the schema;
+- writes `settings/meta.md` — the file that tells the agent this memory system
+  exists at all — plus empty `conv.md` and `code.md` for your own rules;
+- links `skills/memory` and `skills/code-prefs` into `~/.claude/skills`.
+
+> `meta.md` is not optional. Without it the agent never learns these commands
+> exist and silently falls back to the file-based memory in its system prompt,
+> writing markdown into a directory nothing here reads. If you only want the
+> settings and skills part later — after editing `skills/`, say — run
+> `python -m claude_memory install`.
+
+The store lives in the repo by default, beside the preference files:
 
 ```
 <repo>/settings/memory.db
@@ -161,38 +173,46 @@ python scripts/validate_hook_config.py
 
 ---
 
-## 5. Seed the meta node (and make it *yours*)
+## 5. Make the settings files yours
 
-The **meta** node is the one node whose whole job is to be loaded first — it tells
-the agent how to read, write, and correct memory. Without it, the agent sees
-remembered facts but no instructions for using them. Seed it:
+Step 3 created three files in `settings/`. Nothing ships as a default rule, so
+two of them are empty:
 
-```bash
-python scripts/seed_meta.py
-python scripts/seed_prefs.py   # optional: some starter conv/code preferences
-```
+| File | Loaded | What goes in it |
+|---|---|---|
+| `meta.md` | every session, whole | how this memory system works — written for you; edit only if you change the system |
+| `conv.md` | every session, whole | how the agent should communicate and behave |
+| `code.md` | via the `code-prefs` skill | build/test invocations, environment quirks, style rules |
 
-> **These scripts are written for me, by name ("Eric"), with my conventions.**
-> Before seeding, open `scripts/seed_meta.py` and `scripts/seed_prefs.py` and
-> replace the personal bits — your name in the `SUMMARY` text, and any preference
-> that isn't yours. Otherwise your Claude will think it's remembering for me. The
-> node *structure* is what you want; the *content* you should make your own.
+You don't have to write anything now: the agent edits these itself when you state
+a preference or correct it. The one rule is **merge, don't append** — that is the
+whole reason these are files rather than nodes.
+
+`conv.md` is paid for on every session start, so keep it tight. `code.md` is not
+preloaded, so it can afford to be longer.
 
 ---
 
-## 6. Install the `memory` skill (recommended)
+## 6. Skills
 
-The meta node tells the agent to "load the `memory` skill" when writing memory —
-that skill is the field schema and the supersede/retire rules. Make it
-discoverable by copying it where Claude Code looks for skills:
+Step 3 already linked both skills into `~/.claude/skills`:
+
+- **`memory`** — the field schema and the supersede/retire rules, loaded before
+  writing a node.
+- **`code-prefs`** — points at `settings/code.md`, loaded before writing code.
+
+They are **links**, not copies, so a `git pull` reaches the live skill
+immediately — a symlink where the platform allows one, a directory junction on
+Windows, which needs no Developer Mode or elevation. If neither is possible
+`install` copies instead and reports `"linked": false`; in that case re-run
+`python -m claude_memory install` after any change under `skills/`, or the
+installed copy will go on teaching an outdated schema.
+
+Verify with `/skills` in Claude Code, or:
 
 ```bash
-# global skills dir
-mkdir -p ~/.claude/skills
-cp -r skills/memory ~/.claude/skills/memory
+python -m claude_memory install     # idempotent; reports linked vs copied
 ```
-
-(Or symlink it if you'd rather track the repo copy.)
 
 ---
 
@@ -244,7 +264,8 @@ python -m claude_memory t1 --render             # the autoload set
 python -m claude_memory where                   # resolved store + settings paths
 python -m claude_memory snapshot backup.db      # consistent backup (VACUUM INTO)
 python -m claude_memory stale "<handle>"        # mark a node no longer true
-python -m claude_memory migrate --status        # schema version
+python -m claude_memory install                 # re-link skills, seed missing settings
+python -m claude_memory migration status        # is a pre-0.1.0 store waiting?
 ```
 
 `search` and `dig` take several arguments per call and should be used that way: a
@@ -268,4 +289,5 @@ commit the `.db`** (it's gitignored for that reason).
 | `ModuleNotFoundError: claude_memory` | not installed in that Python | `pip install -e .` in the right env |
 | Hooks do nothing, no error | they fail silently by design | run with `CLAUDE_MEMORY_DEBUG=1` |
 | `UnicodeEncodeError` on Windows | console codepage | already handled by the CLI; use `--file` for input |
-| Agent talks about "Eric" | seed content not customized | edit `scripts/seed_meta.py` (step 5) |
+| Agent ignores memory, writes `~/.claude/memory/*.md` | no `settings/meta.md` | `python -m claude_memory install` |
+| Agent uses an old field schema (`title`/`summary`) | installed skill is a stale copy | `python -m claude_memory install` |

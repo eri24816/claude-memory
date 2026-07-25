@@ -87,8 +87,16 @@ reject them and name the file they belong in.
 
 - `conv-pref` → append to `settings/conv.md`
 - `code-pref` → append to `settings/code.md`
-- `meta` → **skip it**. `settings/meta.md` already describes 0.1.0; the old ones
-  describe titles, summaries and refinement-on-demand, none of which exist.
+- `meta` → **skip it.** The old meta nodes describe titles, summaries and
+  refinement-on-demand, none of which exist in 0.1.0. The replacement is written
+  for you: `settings/meta.md` is seeded from the package template by `init` and
+  `install`. Confirm it is there before finishing —
+
+  ```bash
+  python -m claude_memory install   # idempotent; writes meta.md only if missing
+  ```
+
+  Without it the next session is never told this memory system exists.
 
 Do not paste them in one bullet per node. They accumulated append-only and
 several restate each other — **merge them into coherent sections**. This is where

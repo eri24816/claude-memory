@@ -1,6 +1,6 @@
 ---
 name: memory
-description: Field schema and command reference for Eric's claude-memory store. Load before writing a memory, superseding one, or retiring one — the autoloaded block says when to capture, this says how.
+description: Field schema and command reference for the claude-memory store. Load before writing a memory, superseding one, or retiring one — the autoloaded block says when to capture, this says how.
 ---
 
 # Memory — how to write

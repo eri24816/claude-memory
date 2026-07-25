@@ -104,6 +104,12 @@ def main(argv: list[str] | None = None) -> int:
 
     subparsers.add_parser("init", help="create the store and apply the schema")
 
+    install_parser = subparsers.add_parser(
+        "install", help="seed settings/ and link the skills; safe to re-run"
+    )
+    install_parser.add_argument("--skills-dir", default=None,
+                                help="defaults to ~/.claude/skills")
+
     remember_parser = subparsers.add_parser("remember", help="insert or supersede nodes")
     remember_parser.add_argument("--file", default=None, help="path to a JSON array")
     remember_parser.add_argument("--json", default=None, help="inline JSON array")
@@ -196,7 +202,22 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         if args.command == "init":
-            _emit({"db": str(Path(args.db) if args.db else db.DEFAULT_DB_PATH)})
+            # `init` seeds too. It is the command the install doc names first,
+            # and an install that creates a store but no meta.md leaves the
+            # agent with no idea this system exists -- it falls back to the
+            # file-based memory in its system prompt and writes markdown nowhere
+            # anything reads. The store alone is not a working install.
+            from . import install as install_module
+
+            _emit({
+                "db": str(Path(args.db) if args.db else db.DEFAULT_DB_PATH),
+                **install_module.run(),
+            })
+
+        elif args.command == "install":
+            from . import install as install_module
+
+            _emit(install_module.run(args.skills_dir))
 
         elif args.command == "remember":
             specs = _read_specs(args.json, args.file)

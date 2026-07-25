@@ -27,7 +27,7 @@ happens. Two paths, and picking the wrong one is how memory drifts:
 
 Capture corrections and the reason behind them; decisions, with why they won;
 findings established through real work, whether or not a decision followed; and
-Eric's own requests when they trigger real work. Not what the code, git history
+the user's own requests when they trigger real work. Not what the code, git history
 or these files already say. When unsure, save — redundancy is cheap, a lost
 insight costs a session.
 

@@ -1,6 +1,6 @@
 ---
 name: code-prefs
-description: Eric's coding constraints and conventions. Load before writing or editing code in any language — it holds build/test invocations, environment quirks, and style rules that are not derivable from the code itself.
+description: The user's coding constraints and conventions. Load before writing or editing code in any language — it holds build/test invocations, environment quirks, and style rules that are not derivable from the code itself.
 ---
 
 # Coding conventions
