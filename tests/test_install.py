@@ -27,11 +27,26 @@ def test_meta_ships_with_the_repo(fresh):
     behind. An agent without it is never told these commands exist and falls
     back to writing markdown into ~/.claude/, which nothing here reads: a silent
     failure that looks like a working install."""
-    assert settings.path_for("meta") == install.REPO_DIR / "meta.md"
+    assert settings.path_for("meta") == settings.REPO_DIR / "meta.md"
     assert settings.read("meta"), "a clone must arrive with a non-empty meta.md"
     # Deliberately no assertion on the prose. It is the one file whose whole
     # purpose is to be rewritten -- pinning its wording here would mean every
     # edit to it breaks the suite for no reason.
+
+
+def test_writing_meta_cannot_reach_the_real_repo(fresh):
+    """Regression. meta.md sits outside settings/, so CLAUDE_MEMORY_SETTINGS
+    does not isolate it -- and test_render legitimately writes a stub through
+    settings.write("meta"). That truncated the working tree's real meta.md, the
+    shipped default every clone gets, and the only reason it was noticed is that
+    the file is small enough to eyeball. A test suite must not be able to edit
+    the repo it is testing."""
+    settings.write("meta", "a stub written by a test")
+
+    assert settings.REPO_DIR != install.REPO_DIR, "conftest must redirect the repo dir"
+    assert "a stub written by a test" not in (
+        install.REPO_DIR / "meta.md"
+    ).read_text(encoding="utf-8")
 
 
 def test_meta_is_not_written_into_the_user_settings_dir(fresh):
