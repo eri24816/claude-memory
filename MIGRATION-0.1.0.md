@@ -1,128 +1,123 @@
-# Migrating a store to v0.1.0
+# Carrying a pre-0.1.0 store into 0.1.0
 
-**If you are the user:** type `migrate to v0.1.0` in Claude Code. The agent
-reads this file and does the rest. You do not need the details below.
+**If you are the user:** type `migrate memory` in Claude Code. The agent reads
+this file and does the rest.
 
 **If you are the agent:** you are executing this. Read the whole file first.
 
 ---
 
-## What changes
+## What this is
 
-| v0 | v0.1.0 |
+The old store is **never modified**. It is opened read-only, and you re-write its
+nodes into the new store with the ordinary `remember` command. There is no schema
+conversion, no backup step and no rollback, because nothing is ever at risk: the
+old file stays exactly where it is, and stays valid, whatever happens here.
+
+Stopping halfway is fine. The new store's contents *are* the progress record —
+resume by looking at what is already in it.
+
+| v0 | 0.1.0 |
 |---|---|
-| `title` (unique) + `summary` (one sentence, in practice ~700 chars) | `claim` (≤ 8 words, rendered) + `detail` (nullable, only shown by `dig`) |
-| `title` is the handle | `id` is the handle; `resolve` also accepts a claim or an unambiguous fragment |
-| `conv-pref` / `code-pref` / `meta` are nodes | files in `settings/` — editable, so rules can be *merged* instead of only appended |
-| `raw` wiki chunks, refined on demand | removed; returns in 0.2.0 with a per-query cap |
-| store at `~/.claude/memory/memory.db` | store at `settings/memory.db`, beside the pref files |
+| `title` + `summary` (one sentence, ~700 chars in practice) | `claim` (≤ 8 words) + optional `detail` |
+| `conv-pref` / `code-pref` / `meta` nodes | files in `settings/` |
+| `raw` wiki chunks | dropped; 0.2.0 rebuilds them from the wiki |
 
-## Before you start
-
-**You do not need to stop other Claude sessions.** Every session reaches the
-store through short-lived hook and CLI processes, which pick up the new code for
-free. Their writes are already failing anyway, since they are running v1 code
-against a v0 store.
-
-**The daemon is the exception, and `migrate` stops it for you.** It is the only
-long-lived process here, so it holds whatever code it imported at start-up and
-would keep serving retrieval from the pre-migration build against a store that no
-longer matches it. It also opens a connection whenever any session sends a
-message, which is exactly the concurrent writer that `ALTER TABLE ... DROP
-COLUMN` cannot tolerate. `SessionStart` starts it again automatically afterwards.
-
-The one thing worth knowing: **the backup is a point-in-time copy**, taken before
-any change. Anything written after it exists only in the live store, so
-`--rollback` would discard it. That is a reason to migrate promptly rather than
-to shut anything down.
-
-*Not* a reason, contrary to an earlier draft of this file: nodes written by
-another session mid-migration do **not** land as `claim IS NULL`. Once the schema
-is converted, `remember` enforces the claim like any other write, so those nodes
-are complete and simply do not appear in `--next`.
-
-Migration takes a backup automatically (`memory.pre-0.1.0.db`) and copies rather
-than moves the legacy store, so the original at `~/.claude/memory/` stays valid
-until the user deletes it themselves. `python -m claude_memory migrate --rollback`
-restores the backup.
-
-## Step 1 — the mechanical part
+## 1. See what is waiting
 
 ```bash
-python -m claude_memory migrate
+python -m claude_memory migration status
 ```
 
-This relocates the store, backs it up, extracts the pref nodes into
-`settings/conv.md` and `settings/code.md`, replaces `settings/meta.md` with the
-v1 template, drops the `raw` nodes, converts the schema, and reports how many
-nodes are waiting for a claim. It is idempotent — running it twice is safe.
+Reports the old store's path, how many nodes are to be carried, and the breakdown
+by type. `raw` is excluded — those are wiki chunks and are not carried.
 
-`meta.md` is *replaced*, not migrated: every v0 meta node describes titles,
-summaries and refinement-on-demand, none of which exist now.
+The old daemon was already stopped when the new store was created. You do not
+need to stop anything else: sessions reach memory through short-lived processes.
 
-## Step 2 — write the claims (this is the part that needs you)
+## 2. Read a batch
 
 ```bash
-python -m claude_memory migrate --next 20
+python -m claude_memory migration list --limit 25 --offset 0
 ```
 
-Returns nodes with their old `title` and `detail`. For each one write a claim,
-then submit:
+Returns old nodes as JSON — `id`, `title`, `summary`, `type`, `about_user`,
+`scope`, `window_start`, `window_end`, `locator`, `source_session`. Superseded
+nodes are already filtered out.
+
+## 3. Write them into the new store
+
+For each node, compress `title` + `summary` into a **claim of at most 8 words**,
+and keep `detail` only when something is genuinely lost without it.
 
 ```bash
-python -m claude_memory migrate --set --file claims.json
+python -m claude_memory remember --file batch.json
 ```
 
 ```json
 [
-  {"id": "apartment", "claim": "Eric's apartment is 2442 Leslie Circle"},
-  {"id": "discovery", "claim": "Eric will apply for Discovery card",
-   "detail": null}
+  {"claim": "Eric's apartment is 2442 Leslie Circle",
+   "type": "fact", "about_user": true,
+   "window_start": "2026-07-17", "window_end": "2027-07-31"},
+
+  {"claim": "schtasks ONLOGON trigger requires elevation",
+   "type": "fact", "about_user": false, "window_start": "2026-07-24",
+   "detail": "Fails with 'Access is denied' even with /RU set to the current user and /RL LIMITED. The working unelevated path is a .lnk in the Startup folder, created via the WScript.Shell CreateShortcut COM object."}
 ]
 ```
 
-Repeat until `pending` reaches 0. It finalizes itself at that point — drops
-`title`, rebuilds both indexes, stamps the version. **Do not try to finish in one
-context.** The cursor is `claim IS NULL`; stopping and resuming tomorrow costs
-nothing.
+Carry `window_start`, `window_end`, `about_user` and `scope` across unchanged.
+Do **not** carry `id` — the new store derives ids from claims.
 
 ### Writing a good claim
 
-- **Eight words maximum**, enforced. Compress by deleting function words, not by
-  truncating: *"Eric will apply for Discovery card"*, not *"After arriving in
-  Ann Arbor, Eric will apply for the…"*.
-- **No dates.** `window_start`/`window_end` already render as `[2026-08-06..]`.
-  A date in the claim wastes a word and will drift from the field.
-- **Front-load the distinguishing term.** The claim is what search returns and
-  what `resolve` matches on.
-- **`detail` is usually null.** Omit the key to keep the old summary as-is; pass
-  `null` to drop it. Keep detail only for a verification trail, a gotcha, or a
-  correction — if you preserve every old summary wholesale, you have moved the
-  bloat rather than removed it.
+- **Eight words maximum**, enforced by `remember`. Compress by deleting function
+  words, not by truncating: *"Eric will apply for Discovery card"*, not *"After
+  arriving in Ann Arbor, Eric will apply for the…"*.
+- **No dates.** The window renders itself as `[2026-08-06..]`. A date in the
+  claim wastes a word and drifts from the field.
+- **Front-load the distinguishing term** — the claim is what search matches on.
+- **`detail` is usually absent.** Keep it for a verification trail, a gotcha, or
+  a correction. Preserving every old summary wholesale just moves the bloat.
 
-## Step 3 — consolidate the pref files
+### The three types that are no longer nodes
 
-**The size win lives here, not in step 2.** Migration dumps the old pref nodes
-verbatim, one bullet each, because nodes could only be appended — several of them
-restate each other. Rewrite each file into coherent sections, merging duplicates.
-On the reference store this is the difference between ~19k and ~8k characters of
-autoload.
+`conv-pref`, `code-pref` and `meta` must **not** go through `remember` — it will
+reject them and name the file they belong in.
 
-- `settings/conv.md` — preloaded every session. Keep it tight.
-- `settings/code.md` — **not** preloaded; reached through the `code-prefs` skill.
-- `settings/meta.md` — already the v1 template. Leave it unless the workflow
-  genuinely differs.
+- `conv-pref` → append to `settings/conv.md`
+- `code-pref` → append to `settings/code.md`
+- `meta` → **skip it**. `settings/meta.md` already describes 0.1.0; the old ones
+  describe titles, summaries and refinement-on-demand, none of which exist.
 
-HTML comments are stripped before these files reach context, so editorial notes
-cost nothing.
+Do not paste them in one bullet per node. They accumulated append-only and
+several restate each other — **merge them into coherent sections**. This is where
+the autoload budget is actually won: on the reference store, consolidating these
+files is the difference between ~19k and ~8k characters loaded every session.
 
-## Step 4 — verify
+`settings/conv.md` is preloaded every session, so keep it tight. `settings/code.md`
+is not preloaded — it is reached through the `code-prefs` skill — so it can afford
+to be longer.
+
+## 4. Repeat, then finish
+
+Work through the batches with increasing `--offset`. Check progress at any point
+with `migration status`, which reports `written_so_far` from the new store.
+
+When everything is across:
 
 ```bash
-python -m claude_memory migrate --status     # expect: up to date, version 1
-python -m claude_memory t1 --render          # sanity-check the autoload block
-python -m claude_memory search "something you know is in there"
+python -m claude_memory migration done
 ```
 
-Then tell the user the old store is still at `~/.claude/memory/memory.db` and can
-be deleted once they are satisfied.
+That clears the flag and the hooks stop asking. The old store is left exactly
+where it is — it is the only copy of anything you chose not to carry, so deleting
+it is the user's call, not yours. Tell them where it is and that they can remove
+it whenever they like.
+
+## 5. Verify
+
+```bash
+python -m claude_memory t1 --render
+python -m claude_memory search "something you know should be in there"
+```

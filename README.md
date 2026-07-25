@@ -284,21 +284,36 @@ did want — merging — is exactly what a node cannot do. Facts kept the node s
 went home. The thing that changed is not the storage medium but which properties each
 kind of memory actually needs.
 
-### Versioning and migration
+### Migration
 
-The schema version lives in `PRAGMA user_version` and is set only by `migrate` or by
-creating a fresh store — never as a side effect of connecting, since every statement in
-`schema.sql` is `IF NOT EXISTS` and would silently no-op against an old store, leaving
-the stamp as the only trustworthy signal.
+The old store is **never modified**. It is opened read-only, its nodes are
+re-written into the new store through `remember` -- the same path every ordinary
+capture takes -- and it is left exactly where it is.
 
-`SessionStart` compares the two and, on a mismatch, replaces the entire autoload block
-with an upgrade notice. Replaces rather than prepends: a half-converted store renders
-claims that are still null, and a stale-looking-normal block is worse than none.
+That removes almost everything a migration usually needs. No `ALTER TABLE`, so no
+half-applied schema. No relocation, so no file replaced under a live connection.
+No backup or rollback, because the old store *is* the backup. No resumable
+cursor, because the new store's contents are the progress record: an interrupted
+migration resumes by looking at what is already in it.
 
-See `MIGRATION-0.1.0.md`. The deterministic half is one command; rewriting summaries into
-claims is a judgement call per node and is driven by an agent through a `claim IS NULL`
-cursor, so it is idempotent and resumable across sessions rather than something that must
-survive one context window.
+The trigger is store **creation**, not a version comparison. When a hook finds no
+store it creates one, and that is the moment to notice a pre-0.1.0 store sitting
+elsewhere -- a check that needs no schema at all, unlike a version comparison,
+which can only be made by opening the old store as though it were current.
+
+Four steps, of which one is the agent's:
+
+1. A hook finds no store, so one is created.
+2. A legacy store exists, so `settings/migration.json` records `migrating` and
+   the old daemon is stopped -- verified by command line first, because a
+   discovery file outlives the process that wrote it and pids get reused.
+3. The agent reads the old nodes and re-writes them. Compressing a 700-character
+   summary into an 8-word claim is a judgement call per node, which is why this
+   step is not a script.
+4. `migration done` clears the flag. The old store stays: it is the only copy of
+   anything the agent chose not to carry.
+
+See `MIGRATION-0.1.0.md`.
 
 ### Agent-facing API
 

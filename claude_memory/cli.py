@@ -72,41 +72,27 @@ def _deny_writes(action, *_args):
     return sqlite3.SQLITE_OK if action in READ_ONLY_ACTIONS else sqlite3.SQLITE_DENY
 
 
-def _migrate(args) -> int:
-    """The migrate subcommand, which owns its own connection lifetime.
+def _migration(args) -> int:
+    """The migration subcommand. Read-only against the old store throughout.
 
-    Every branch but `run` needs a connection; `run` must open its own, after it
-    has finished moving files around.
+    Opens the current store only for `status`, which reports progress by
+    counting what is already there -- the new store's own contents are the
+    progress record, so there is no separate cursor to keep in sync.
     """
-    from . import migrate as migrate_module
-    from .models import InvariantError as _InvariantError
+    from . import migration
 
+    if args.migration_command == "list":
+        _emit(migration.list_nodes(limit=args.limit, offset=args.offset))
+        return 0
+    if args.migration_command == "done":
+        _emit(migration.done())
+        return 0
+
+    connection = db.connect(args.db)
     try:
-        if args.rollback:
-            _emit(migrate_module.rollback(args.db))
-            return 0
-        if not (args.status or args.set_file or args.next_n):
-            _emit(migrate_module.run(None, args.db))
-            return 0
-
-        connection = db.connect(args.db)
-        try:
-            if args.status:
-                _emit(migrate_module.status(connection))
-            elif args.set_file:
-                _emit(migrate_module.set_claims(
-                    connection, _read_specs(None, args.set_file)
-                ))
-            else:
-                _emit(migrate_module.next_batch(connection, args.next_n))
-        finally:
-            connection.close()
-    except _InvariantError as error:
-        _emit({"error": "invariant", "detail": str(error)})
-        return 2
-    except sqlite3.DatabaseError as error:
-        _emit({"error": "database", "detail": str(error)})
-        return 3
+        _emit(migration.status(connection))
+    finally:
+        connection.close()
     return 0
 
 
@@ -166,17 +152,15 @@ def main(argv: list[str] | None = None) -> int:
     # module stays in the tree untouched: 0.2.0 revives it, and re-ingest is
     # lossless now that nothing refines a raw node into something worth keeping.
 
-    migrate_parser = subparsers.add_parser(
-        "migrate", help="upgrade an older store to this version"
+    migration_parser = subparsers.add_parser(
+        "migration", help="carry a pre-0.1.0 store across; see MIGRATION-0.1.0.md"
     )
-    migrate_parser.add_argument(
-        "--next", type=int, default=0, metavar="N", dest="next_n",
-        help="print up to N nodes still awaiting a claim",
-    )
-    migrate_parser.add_argument("--set", default=None, dest="set_file",
-                                help="path to a JSON array of {id, claim, detail}")
-    migrate_parser.add_argument("--status", action="store_true")
-    migrate_parser.add_argument("--rollback", action="store_true")
+    migration_sub = migration_parser.add_subparsers(dest="migration_command", required=True)
+    migration_sub.add_parser("status", help="what is left to carry across")
+    list_parser = migration_sub.add_parser("list", help="old nodes to re-write")
+    list_parser.add_argument("--limit", type=int, default=25)
+    list_parser.add_argument("--offset", type=int, default=0)
+    migration_sub.add_parser("done", help="clear the flag; leaves the old store alone")
 
     where_parser = subparsers.add_parser(
         "where", help="print resolved paths for the store and the settings files"
@@ -197,7 +181,7 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
 
-    if args.command == "migrate":
+    if args.command == "migration":
         # Dispatched BEFORE connecting, and that ordering is load-bearing.
         # `run` may replace the file at the target path -- relocating a
         # pre-0.1.0 store from ~/.claude -- and a connection opened beforehand
@@ -206,7 +190,7 @@ def main(argv: list[str] | None = None) -> int:
         # "already at v1" and do nothing, while the freshly copied v0 data sat
         # underneath it. Reporting success while doing nothing is far worse than
         # failing, because the caller moves on.
-        return _migrate(args)
+        return _migration(args)
 
     connection = db.connect(args.db)
 

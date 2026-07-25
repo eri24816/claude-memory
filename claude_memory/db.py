@@ -79,30 +79,31 @@ def init_schema(connection: sqlite3.Connection) -> None:
         "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'nodes'"
     ).fetchone() is None
 
-    if not fresh and needs_migration(connection):
+    if not fresh:
         columns = {row[1] for row in connection.execute("PRAGMA table_info(nodes)")}
-        if "claim" in columns:
-            # Already v1 in shape but never stamped -- a store created by a build
-            # that had the new schema and not yet the version stamp. Without this
-            # it is stuck forever: the branch below would return early on every
-            # connect, so it could never earn the stamp, and `migrate` would keep
-            # reporting an upgrade that has nothing left to do. Infer the version
-            # from the shape, since the shape is the ground truth the stamp only
-            # summarises.
-            connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
-            connection.commit()
-        else:
-            # A genuine v0 store cannot take this file at all -- `CREATE INDEX ...
-            # ON nodes(claim)` fails outright on a table that still has (title,
-            # summary). Applying nothing is correct: migrate owns the conversion,
-            # and every other command refuses to run against an un-migrated store
-            # rather than half-working.
+        if "claim" not in columns:
+            # Someone has pointed CLAUDE_MEMORY_DB straight at a pre-0.1.0 store.
+            # This file cannot be applied to it -- `CREATE INDEX ... ON
+            # nodes(claim)` fails outright against a table that still has (title,
+            # summary) -- and converting it in place is exactly what 0.1.0 stopped
+            # doing. Leave it untouched; hooks explain where to point instead.
             return
+        connection.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
+        connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+        connection.commit()
+        return
 
     connection.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
-    if fresh:
-        connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+    connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     connection.commit()
+
+    # Step 0 of the upgrade path: the store did not exist, so it has just been
+    # created empty. If a pre-0.1.0 store is sitting elsewhere, this is the exact
+    # moment to notice -- before anything has been written here, and without
+    # having to open the old store as though it were current.
+    from . import migration
+
+    migration.begin_if_needed()
 
 
 def snapshot(connection: sqlite3.Connection, destination: Path | str) -> Path:

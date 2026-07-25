@@ -49,90 +49,59 @@ MAINTENANCE_REMINDER = (
     "now. If none do, say so in one line and continue."
 )
 
-# Emitted by every hook while the store predates the running code, because the
-# failure is total: T1 has nothing to render, retrieval returns nothing, and
-# writes raise. Saying it once at session start is not enough -- a session that
-# starts before anyone reads the notice will go on silently behaving as though
-# memory is empty, which is indistinguishable from a user who has never told it
-# anything.
+# Emitted by SessionStart and UserPromptSubmit while a pre-0.1.0 store is still
+# waiting to be carried across. Once per message, not once per session: a session
+# that started before the flag was set would otherwise go on treating memory as
+# empty, which from the inside is indistinguishable from a user who has never
+# said anything.
 #
-# It names the paths rather than a command alone: the agent may be running in
-# any directory, and "run migrate" is not actionable if it cannot find the repo.
-#
-# It asks rather than acts. Migration rewrites the user's most irreplaceable
-# data and wants other sessions stopped first; that is a decision, not a chore.
+# NOT emitted from Stop. Stop's additionalContext forces the turn to continue, so
+# anything unconditional there makes the conversation unable to end, and
+# UserPromptSubmit already covers every path into a turn.
 MIGRATION_NOTICE = (
-    "MEMORY IS NOT WORKING. The store at {db} is schema v{found}; this code "
-    "expects v{expected}. Until it is migrated, retrieval returns nothing and "
-    "every write fails -- so treat memory as unavailable rather than empty, and "
-    "do not conclude that anything is 'not in memory'.\n"
-    "Ask the user whether to migrate now. If they agree, follow {doc} -- other "
-    "sessions do NOT need stopping, and migrate stops the daemon itself. If they "
-    "decline, carry on without memory and do not ask again this session."
+    "MEMORY IS MID-MIGRATION. A pre-0.1.0 store with {total} nodes is at {legacy} "
+    "and has not been carried into the new store yet. Memory is NOT empty -- the "
+    "old nodes are simply not here, so do not conclude that anything was never "
+    "saved.\n"
+    "Ask the user whether to migrate now. If they agree, follow {doc}. The old "
+    "store is only ever read, so this is safe to start and safe to stop halfway."
+)
+
+# A different failure with the same symptom: the configured store IS the old one,
+# because CLAUDE_MEMORY_DB points at it. Nothing can be done from inside that
+# store, so the notice says where to point instead.
+LEGACY_TARGET_NOTICE = (
+    "MEMORY IS MISCONFIGURED. The store at {db} is a pre-0.1.0 store, and this "
+    "code cannot read or write it. Unset CLAUDE_MEMORY_DB (or point it at a new "
+    "path) so a current store is created, then follow {doc} to carry the old "
+    "nodes across."
 )
 
 
-ORPHANED_LEGACY_NOTICE = (
-    "MEMORY IS NOT MIGRATED. The configured store at {db} is empty, but a "
-    "pre-0.1.0 store with {count} nodes is sitting unmigrated at {legacy}. "
-    "Memory is NOT empty -- it is unreachable, so do not conclude that anything "
-    "was never saved.\n"
-    "Ask the user whether to migrate now. If they agree, follow {doc}."
-)
-
-
-def _legacy_node_count() -> int:
-    """Nodes in the pre-0.1.0 store, or 0 if there is nothing there."""
-    import sqlite3 as _sqlite3
-
-    from . import db
-
-    if not db.LEGACY_DB_PATH.exists():
-        return 0
-    try:
-        with _sqlite3.connect(f"file:{db.LEGACY_DB_PATH}?mode=ro", uri=True) as old:
-            return old.execute("SELECT COUNT(*) FROM nodes").fetchone()[0]
-    except _sqlite3.DatabaseError:
-        return 0
+def _doc_path() -> Path:
+    return Path(__file__).resolve().parent.parent / "MIGRATION-0.1.0.md"
 
 
 def migration_notice(connection: sqlite3.Connection) -> str:
-    """The notice, or empty if the store is current and actually holds the data.
+    """The notice, or empty if memory is ready to use."""
+    from . import db, migration
 
-    Two distinct failures, and the second is the dangerous one. An un-migrated
-    store announces itself through the version stamp. But an *empty* store at the
-    new path is perfectly valid and stamps itself current, so a user whose data
-    still sits at the legacy path would get a clean, silent, empty memory -- which
-    reads exactly like "you never told me anything" rather than "your data is over
-    there". Nothing else in the system would ever notice.
-    """
-    from . import db
-
-    if not db.needs_migration(connection):
-        if connection.execute("SELECT COUNT(*) FROM nodes").fetchone()[0]:
-            return ""
-        legacy_count = _legacy_node_count()
-        if not legacy_count:
-            return ""
+    columns = {row[1] for row in connection.execute("PRAGMA table_info(nodes)")}
+    if columns and "claim" not in columns:
         attached = connection.execute("PRAGMA database_list").fetchone()
-        return ORPHANED_LEGACY_NOTICE.format(
+        return LEGACY_TARGET_NOTICE.format(
             db=attached["file"] if attached and attached["file"] else db.DEFAULT_DB_PATH,
-            legacy=db.LEGACY_DB_PATH,
-            count=legacy_count,
-            doc=Path(__file__).resolve().parent.parent / "MIGRATION-0.1.0.md",
+            doc=_doc_path(),
         )
 
-    # The file this connection actually opened, not DEFAULT_DB_PATH. An
-    # un-migrated store is by definition still at the old location, so the
-    # configured path names somewhere the data is not -- and a notice that
-    # points at the wrong file is how someone migrates an empty database and
-    # concludes their memory is gone.
-    attached = connection.execute("PRAGMA database_list").fetchone()
+    if not migration.is_migrating():
+        return ""
+
+    state = migration.read_state()
     return MIGRATION_NOTICE.format(
-        db=attached["file"] if attached and attached["file"] else db.DEFAULT_DB_PATH,
-        doc=Path(__file__).resolve().parent.parent / "MIGRATION-0.1.0.md",
-        found=db.user_version(connection),
-        expected=db.SCHEMA_VERSION,
+        total=state.get("legacy_total", "some"),
+        legacy=state.get("legacy_db", db.LEGACY_DB_PATH),
+        doc=_doc_path(),
     )
 
 
