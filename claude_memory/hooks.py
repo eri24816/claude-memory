@@ -41,8 +41,23 @@ MAINTENANCE_REMINDER = (
     "4. A request from Eric that triggered real work (research, comparison, "
     "verification) -- worth an action node of its own, separate from what "
     "the work produced.\n"
+    "Note the two write paths: a stated preference, correction or convention is "
+    "an EDIT to settings/conv.md or settings/code.md -- consolidate it into what "
+    "is already there rather than appending a near-duplicate. Everything else is "
+    "`remember`.\n"
     "If any of the four clears the bar, load the memory skill and write it "
     "now. If none do, say so in one line and continue."
+)
+
+# Prepended to T1 when the store predates the running code. The alternative was
+# expecting the user to know a magic phrase; this reaches every session of every
+# user automatically, and makes "migrate to v0.1.0" a confirmation rather than
+# something they had to have read a README to discover.
+MIGRATION_NOTICE = (
+    "MEMORY NEEDS MIGRATION: the store is at schema v{found}, this code expects "
+    "v{expected}. Reads and writes are unreliable until it is upgraded. Run "
+    "`python -m claude_memory migrate` and follow MIGRATION-0.1.0.md in the "
+    "claude-memory repo."
 )
 
 
@@ -82,7 +97,15 @@ def build_session_start_context(payload: dict, connection: sqlite3.Connection) -
     keeping this symmetric with build_user_prompt_context avoids two shapes
     for the same kind of thing.
     """
-    from . import retrieval
+    from . import db, retrieval
+
+    if db.needs_migration(connection):
+        # Returned alone. A half-converted store renders claims that are still
+        # NULL and facts that may already have been deleted, and a stale autoload
+        # block that looks normal is worse than none: the agent would act on it.
+        return MIGRATION_NOTICE.format(
+            found=db.user_version(connection), expected=db.SCHEMA_VERSION
+        )
 
     scope = scope_for_cwd(payload.get("cwd") or os.getcwd())
     return retrieval.render_t1(retrieval.assemble_t1(connection, scope=scope))
@@ -95,10 +118,14 @@ def build_user_prompt_context(payload: dict, connection: sqlite3.Connection) -> 
     including "ok" and "yes", and injecting three unrelated nodes into a
     message that needed none is worse than injecting nothing.
     """
-    from . import retrieval
+    from . import db, retrieval
 
     prompt = (payload.get("prompt") or "").strip()
     if not prompt or not retrieval.should_retrieve(prompt):
+        return ""
+    if db.needs_migration(connection):
+        # Silent, unlike session start: the notice has already been delivered
+        # once this session, and repeating it on every message would be noise.
         return ""
 
     scope = scope_for_cwd(payload.get("cwd") or os.getcwd())

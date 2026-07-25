@@ -3,6 +3,7 @@ the user talks to the agent, and the agent calls this.
 
     python -m claude_memory search "michigan housing"
     python -m claude_memory dig "Ann Arbor apartment"
+    python -m claude_memory context "Ann Arbor apartment"
     python -m claude_memory t1 --scope project:polygenie --render
     python -m claude_memory remember --file nodes.json
 """
@@ -85,7 +86,10 @@ def main(argv: list[str] | None = None) -> int:
     remember_parser.add_argument("--run-id", default=None)
 
     search_parser = subparsers.add_parser("search", help="hybrid BM25 + vector retrieval")
-    search_parser.add_argument("query")
+    # Several queries in one call: a tool invocation is billed for its cached
+    # prefix once, so N searches in one call cost a fraction of N calls. Finding
+    # a node usually takes more than one angle, so this is the normal shape.
+    search_parser.add_argument("query", nargs="+")
     search_parser.add_argument("--scope", default=None)
     search_parser.add_argument("--limit", type=int, default=10)
     search_parser.add_argument("--parent", default=None, help="dig down into an abstraction")
@@ -96,9 +100,19 @@ def main(argv: list[str] | None = None) -> int:
     search_parser.add_argument("--include-autoloaded", action="store_true",
                                help="do not filter out what T1 already loaded")
 
-    dig_parser = subparsers.add_parser("dig", help="expand one node by its title")
-    dig_parser.add_argument("title")
+    dig_parser = subparsers.add_parser(
+        "dig", help="expand nodes by id or claim; several handles in one call"
+    )
+    dig_parser.add_argument("handle", nargs="+")
     dig_parser.add_argument("--json", action="store_true")
+
+    context_parser = subparsers.add_parser(
+        "context", help="show the transcript around a session-sourced node's origin"
+    )
+    context_parser.add_argument("title")
+    context_parser.add_argument("--window", type=int, default=3,
+                                help="messages of context on each side of the hit")
+    context_parser.add_argument("--json", action="store_true")
 
     t1_parser = subparsers.add_parser("t1", help="assemble the autoload set")
     t1_parser.add_argument("--scope", default=None)
@@ -110,10 +124,27 @@ def main(argv: list[str] | None = None) -> int:
     rollback_parser = subparsers.add_parser("rollback", help="undo a capture run")
     rollback_parser.add_argument("capture_run_id")
 
-    ingest_parser = subparsers.add_parser("ingest", help="heading-split a file or folder")
-    ingest_parser.add_argument("path")
-    ingest_parser.add_argument("--scope", default="global")
-    ingest_parser.add_argument("--dry-run", action="store_true")
+    # `ingest` is gone for 0.1.0 along with the `raw` type it produced. The
+    # module stays in the tree untouched: 0.2.0 revives it, and re-ingest is
+    # lossless now that nothing refines a raw node into something worth keeping.
+
+    migrate_parser = subparsers.add_parser(
+        "migrate", help="upgrade an older store to this version"
+    )
+    migrate_parser.add_argument(
+        "--next", type=int, default=0, metavar="N", dest="next_n",
+        help="print up to N nodes still awaiting a claim",
+    )
+    migrate_parser.add_argument("--set", default=None, dest="set_file",
+                                help="path to a JSON array of {id, claim, detail}")
+    migrate_parser.add_argument("--status", action="store_true")
+    migrate_parser.add_argument("--rollback", action="store_true")
+
+    where_parser = subparsers.add_parser(
+        "where", help="print resolved paths for the store and the settings files"
+    )
+    where_parser.add_argument("--code", action="store_true",
+                              help="just the code conventions path")
 
     sql_parser = subparsers.add_parser("sql", help="read-only query escape hatch")
     sql_parser.add_argument("query")
@@ -140,24 +171,51 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "search":
             # The rendered block is the default: it is what an agent should read,
             # and the ranks only matter when debugging retrieval itself.
-            hits = retrieval.search(
-                connection, args.query, limit=args.limit,
-                scope=args.scope, parent=args.parent, node_type=args.node_type,
-                exclude_ids=None if args.include_autoloaded
-                else retrieval.t1_ids(connection, scope=args.scope),
+            excluded = (
+                None if args.include_autoloaded
+                else retrieval.t1_ids(connection, scope=args.scope)
             )
+            results = [
+                (query, retrieval.search(
+                    connection, query, limit=args.limit,
+                    scope=args.scope, parent=args.parent, node_type=args.node_type,
+                    exclude_ids=excluded,
+                ))
+                for query in args.query
+            ]
             if args.json:
-                _emit(hits)
+                _emit(results if len(results) > 1 else results[0][1])
             else:
-                sys.stdout.write(retrieval.render_context(hits) + "\n")
+                # Labelled only when there is more than one, so the single-query
+                # case stays exactly as terse as it was.
+                blocks = [
+                    retrieval.render_context(
+                        hits,
+                        heading=f"# memory that could be useful ({query}):"
+                        if len(results) > 1 else "# memory that could be useful:",
+                    )
+                    for query, hits in results
+                ]
+                sys.stdout.write("\n\n".join(b for b in blocks if b) + "\n")
 
         elif args.command == "dig":
-            node = retrieval.dig(connection, args.title)
+            nodes = [(handle, retrieval.dig(connection, handle))
+                     for handle in args.handle]
             if args.json:
-                _emit(node)
+                _emit([node for _, node in nodes]
+                      if len(nodes) > 1 else nodes[0][1])
             else:
-                sys.stdout.write(retrieval.render_dig(node, args.title) + "\n")
-            if node is None:
+                sys.stdout.write(retrieval.render_digs(nodes) + "\n")
+            if any(node is None for _, node in nodes):
+                return 4
+
+        elif args.command == "context":
+            excerpt = retrieval.dig_context(connection, args.title, window=args.window)
+            if args.json:
+                _emit(excerpt)
+            else:
+                sys.stdout.write(retrieval.render_transcript(excerpt, args.title))
+            if excerpt is None:
                 return 4
 
         elif args.command == "t1":
@@ -174,12 +232,34 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "rollback":
             _emit(store.rollback_run(connection, args.capture_run_id))
 
-        elif args.command == "ingest":
-            from . import ingest as ingest_module
+        elif args.command == "migrate":
+            from . import migrate as migrate_module
 
-            _emit(ingest_module.ingest_path(
-                connection, args.path, scope=args.scope, dry_run=args.dry_run,
-            ))
+            if args.rollback:
+                _emit(migrate_module.rollback(args.db))
+            elif args.status:
+                _emit(migrate_module.status(connection))
+            elif args.set_file:
+                _emit(migrate_module.set_claims(
+                    connection, _read_specs(None, args.set_file)
+                ))
+            elif args.next_n:
+                _emit(migrate_module.next_batch(connection, args.next_n))
+            else:
+                _emit(migrate_module.run(connection, args.db))
+
+        elif args.command == "where":
+            from . import settings as settings_module
+
+            if args.code:
+                sys.stdout.write(str(settings_module.path_for("code")) + "\n")
+            else:
+                _emit({
+                    "db": str(Path(args.db) if args.db else db.DEFAULT_DB_PATH),
+                    "settings": str(settings_module.settings_dir()),
+                    **{name: str(settings_module.path_for(name))
+                       for name in settings_module.FILES},
+                })
 
         elif args.command == "sql":
             connection.set_authorizer(_deny_writes)

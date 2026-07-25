@@ -67,8 +67,8 @@ def test_request_matches_the_in_process_path(scratch_db):
     whenever the daemon is not yet up -- the two paths have to agree."""
     connection = db.connect(scratch_db)
     store.remember(connection, [{
-        "title": "Daemon parity fact",
-        "summary": "A fact that must retrieve identically whether the daemon or the direct path answers.",
+        "claim": "Daemon parity fact",
+        "detail": "A fact that must retrieve identically whether the daemon or the direct path answers.",
         "type": "fact", "about_user": False, "window_start": "2026-07-20",
     }])
     connection.close()
@@ -96,8 +96,8 @@ def test_second_request_is_faster_than_the_first(scratch_db):
     the daemon: every request after should not pay it again."""
     connection = db.connect(scratch_db)
     store.remember(connection, [{
-        "title": "Warmup timing fact",
-        "summary": "A fact used only to give the daemon something to embed against for timing.",
+        "claim": "Warmup timing fact",
+        "detail": "A fact used only to give the daemon something to embed against for timing.",
         "type": "fact", "about_user": False, "window_start": "2026-07-20",
     }])
     connection.close()
@@ -151,8 +151,8 @@ def test_user_prompt_submit_hook_uses_the_daemon_once_warm(scratch_db):
 
     connection = db.connect(scratch_db)
     store.remember(connection, [{
-        "title": "Hook-path daemon fact",
-        "summary": "Verifies user_prompt_submit() reaches the daemon rather than always falling back.",
+        "claim": "Hook-path daemon fact",
+        "detail": "Verifies user_prompt_submit() reaches the daemon rather than always falling back.",
         "type": "fact", "about_user": False, "window_start": "2026-07-20",
     }])
     connection.close()

@@ -14,8 +14,8 @@ import sys
 import pytest
 
 CJK_NODE = [{
-    "title": "Mixed script note",
-    "summary": "幫 user 切 input 選 seed — an em dash and CJK in one summary.",
+    "claim": "Mixed script note",
+    "detail": "幫 user 切 input 選 seed — an em dash and CJK in one summary.",
     "type": "fact",
     "about_user": False,
     "window_start": "2026-07-20",

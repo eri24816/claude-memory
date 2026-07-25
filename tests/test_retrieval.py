@@ -8,24 +8,26 @@ from claude_memory import db, retrieval, store
 
 NODES = [
     {
-        "title": "Move-in and key pickup",
-        "summary": "Eric arrives at the Traver Heights apartment on 2026-08-05 around 10 PM.",
+        "claim": "Eric moves into Traver Heights apartment",
+        "detail": "Arrives 2026-08-05 around 10 PM for key pickup.",
         "type": "todo", "about_user": True, "window_start": "2026-08-05",
     },
     {
-        "title": "Ann Arbor apartment",
-        "summary": "Eric's Ann Arbor apartment is at 2442 Leslie Circle, lease starting 2026-07-17.",
+        "claim": "Eric's apartment is 2442 Leslie Circle",
+        "detail": "Ann Arbor, lease starting 2026-07-17.",
         "type": "fact", "about_user": True, "window_start": "2026-07-17",
     },
     {
-        "title": "Fizz rebranded to Mine",
-        "summary": "The student credit-builder Fizz now operates as Mine (usemine.com).",
+        "claim": "Fizz rebranded to Mine",
+        "detail": "The student credit-builder now operates as Mine (usemine.com).",
         "type": "fact", "about_user": False, "window_start": "2026-07-20",
     },
     {
-        "title": "D drive root is not writable",
-        "summary": "Writing to the D drive root fails with EPERM; use a subdirectory instead.",
-        "type": "code-pref",
+        # Detail carries the rare token, so this doubles as the check that
+        # indexing reaches past the claim -- compression is display-only.
+        "claim": "D drive root is not writable",
+        "detail": "Writing to the D drive root fails with EPERM; use a subdirectory.",
+        "type": "fact", "about_user": False, "window_start": "2026-06-01",
     },
 ]
 
@@ -47,9 +49,9 @@ def test_stopwords_do_not_poison_ranking(connection):
     """
     hits = retrieval.search(connection, "where am I moving to next month?")
     position = {
-        "apartment" if "apartment" in hit["summary"] else
-        "fizz" if "Fizz" in hit["summary"] else
-        "eperm" if "EPERM" in hit["summary"] else "other": index
+        "apartment" if "Leslie" in hit["claim"] else
+        "fizz" if "Fizz" in hit["claim"] else
+        "eperm" if "D drive" in hit["claim"] else "other": index
         for index, hit in enumerate(hits)
     }
     assert position["apartment"] < position["fizz"]
@@ -58,7 +60,7 @@ def test_stopwords_do_not_poison_ranking(connection):
 
 def test_exact_rare_token_wins_lexically(connection):
     hits = retrieval.search(connection, "EPERM", limit=1)
-    assert "EPERM" in hits[0]["summary"]
+    assert "EPERM" in hits[0]["detail"]
     assert hits[0]["lexical_rank"] == 1
 
 
@@ -77,8 +79,8 @@ def test_stratified_guarantees_personal_slots(connection):
     """
     world_filler = [
         {
-            "title": f"University statement {index}",
-            "summary": f"Statement about university number {index} and moving between campuses next year.",
+            "claim": f"University statement number {index}",
+            "detail": f"Statement about university {index} and moving between campuses next year.",
             "type": "fact", "about_user": False, "window_start": "2026-01-01",
         }
         for index in range(40)
@@ -109,8 +111,8 @@ def test_exclusion_does_not_shrink_the_result_set(connection):
     """Regression risk: filtering after LIMIT would let excluded rows consume
     slots, silently returning fewer hits than asked for."""
     filler = [
-        {"title": f"Apartment note {index}",
-         "summary": f"Note number {index} about apartments and moving house.",
+        {"claim": f"Apartment note number {index}",
+         "detail": f"Note {index} about apartments and moving house.",
          "type": "fact", "about_user": False, "window_start": "2026-01-01"}
         for index in range(10)
     ]

@@ -6,17 +6,17 @@ import re
 import sqlite3
 from typing import Any
 
-from . import embed
+from . import embed, transcript
 
 RRF_K = 60
 CANDIDATE_K = 200
 FINAL_K = 10
 
-# Raw chunks are unread source text competing against claims someone actually
-# judged. They should still surface — that is the whole point of indexing them —
-# but a refined node on the same topic should win. Multiplicative, so a raw hit
-# that dominates on both halves can still outrank a weak refined one.
-RAW_DEMOTION = 0.6
+# v0 demoted raw hits by 0.6 so a refined node covering the same ground would
+# win. Refinement never once happened — 518 raw nodes, zero refined — so there
+# was no counterpart to lose to and the penalty only made raw hits weaker at the
+# one thing they were good for. 0.2.0 reintroduces raw with a per-query cap,
+# which bounds the flood regardless of corpus size instead of guessing at rank.
 
 # Sections of one document are near-identical in embedding space, so a matching
 # page sweeps the top slots and buries every other source. Capping per source
@@ -90,9 +90,9 @@ def search(
 
     superseded_clause = "" if include_superseded else "AND n.superseded_by IS NULL"
 
-    # NULL is the world stratum, not a third one: 'raw' and the preference types
-    # never declare about_user, and filtering on `= 0` would drop them from both
-    # populations and so from stratified retrieval entirely.
+    # NULL is the world stratum, not a third one: `idea` never declares
+    # about_user, and filtering on `= 0` would drop it from both populations and
+    # so from stratified retrieval entirely.
     about_clause = ""
     if about_user is True:
         about_clause = "AND n.about_user = 1"
@@ -131,18 +131,16 @@ def search(
             WHERE embedding MATCH ? AND k = ?
         ),
         ranked AS (
-            SELECT n.id, n.title, n.summary, n.type, n.scope, n.about_user,
+            SELECT n.id, n.claim, n.detail, n.type, n.scope, n.about_user,
                    n.window_start, n.window_end, n.stale,
                    lexical.rank  AS lexical_rank,
                    semantic.rank AS semantic_rank,
-                   (CASE WHEN n.type = 'raw' THEN ? ELSE 1.0 END)
-                 * (COALESCE(1.0 / (? + lexical.rank), 0)
-                  + COALESCE(1.0 / (? + semantic.rank), 0)) AS score,
+                   COALESCE(1.0 / (? + lexical.rank), 0)
+                 + COALESCE(1.0 / (? + semantic.rank), 0) AS score,
                    ROW_NUMBER() OVER (
                        PARTITION BY COALESCE(n.derived_from, n.id)
-                       ORDER BY (CASE WHEN n.type = 'raw' THEN ? ELSE 1.0 END)
-                              * (COALESCE(1.0 / (? + lexical.rank), 0)
-                               + COALESCE(1.0 / (? + semantic.rank), 0)) DESC
+                       ORDER BY COALESCE(1.0 / (? + lexical.rank), 0)
+                              + COALESCE(1.0 / (? + semantic.rank), 0) DESC
                    ) AS source_position
             FROM nodes n
             LEFT JOIN lexical  ON lexical.node_rowid  = n.rowid
@@ -155,7 +153,7 @@ def search(
               {exclude_clause}
               {type_clause}
         )
-        SELECT id, title, summary, type, scope, about_user,
+        SELECT id, claim, detail, type, scope, about_user,
                window_start, window_end, stale,
                lexical_rank, semantic_rank, score
         FROM ranked
@@ -167,7 +165,7 @@ def search(
     rows = connection.execute(
         sql,
         (match_expression, CANDIDATE_K, query_vector, CANDIDATE_K,
-         RAW_DEMOTION, RRF_K, RRF_K, RAW_DEMOTION, RRF_K, RRF_K,
+         RRF_K, RRF_K, RRF_K, RRF_K,
          *scopes, *parent_params, *exclude_params, *type_params,
          max_per_source, limit),
     ).fetchall()
@@ -207,11 +205,11 @@ def search_stratified(
     return sorted([*personal, *world], key=lambda hit: hit["score"], reverse=True)
 
 
-# A raw chunk runs to MAX_SECTION_CHARS (1500), so three of them would inject
-# ~4.5k characters into every message. Retrieved text is a pointer, not the
-# document: the id travels with each hit, so an agent that wants the whole
-# section can fetch it deliberately instead of paying for it on every turn.
-HIT_CHARS = 400
+# Appended to a rendered claim whose node carries detail. Without it, digging is
+# a gamble: an 8-word claim reads as the whole node, so an agent would act on the
+# summary of a node whose entire value sits in the detail it never saw. One
+# character turns that into an informed choice.
+DETAIL_MARKER = " +"
 
 
 def _date_field(node: dict[str, Any]) -> str:
@@ -223,75 +221,90 @@ def _date_field(node: dict[str, Any]) -> str:
     return f"{start}.." if start else f"..{end}"
 
 
+def render_hit(node: dict[str, Any]) -> str:
+    """One node as one line: type, window, claim, and whether detail exists."""
+    marker = DETAIL_MARKER if node.get("detail") else ""
+    return f"{node['type']}, {_date_field(node)}, {node['claim']}{marker}"
+
+
 def render_context(
     hits: list[dict[str, Any]], heading: str = "# memory that could be useful:"
 ) -> str:
-    """Render hits as one comma-delimited row each: type, date, title, content.
+    """Render hits as one comma-delimited row each: type, date, claim.
 
-    Deliberately bare. This text is injected on every qualifying message, so
-    prose framing is a per-message tax; the standing instructions for reading it
-    — including what a `raw` hit means — live once in the meta node instead.
+    Nothing is truncated any more, and that is the point. v0 clipped a 684-char
+    summary at 400 and had to instruct the agent to dig "whenever a truncated row
+    looks like it matters" — dig was repair work for a render that could not tell
+    the whole truth. A claim is complete by construction, so a row is now either
+    the whole node or a claim plus a `+` saying there is more.
 
-    The title doubles as the handle: it is unique, so an agent that wants the
-    whole node digs by the title printed here.
+    Deliberately bare: this text is injected on every qualifying message, so
+    prose framing is a per-message tax.
     """
     if not hits:
         return ""
-
-    lines = [heading]
-    for hit in hits:
-        content = " ".join(hit["summary"].split())
-        if len(content) > HIT_CHARS:
-            content = content[:HIT_CHARS].rstrip() + "…"
-        lines.append(f"{hit['type']}, {_date_field(hit)}, {hit['title']}, {content}")
-    return "\n".join(lines)
+    return "\n".join([heading, *(render_hit(hit) for hit in hits)])
 
 
 DIG_FIELDS = (
-    "title", "type", "summary", "about_user", "scope",
+    "claim", "type", "detail", "about_user", "scope",
     "window_start", "window_end", "stale", "origin", "locator",
     "source_session", "updated",
 )
 
 
-def dig(connection: sqlite3.Connection, title: str) -> dict[str, Any] | None:
-    """Expand one node by its title, the handle retrieval prints.
+def dig(connection: sqlite3.Connection, handle: str) -> dict[str, Any] | None:
+    """Expand one node by id, exact claim, or unambiguous claim fragment.
 
-    Retrieval shows a truncated line; this is how an agent reads the whole thing
-    and sees what it connects to. Links resolve to titles rather than ids,
-    because ids never appear in what the agent was shown — handing back a
-    dangling slug would be a reference it cannot follow.
+    Links render as the linked node's claim rather than its id: the claim is
+    what the agent has seen, and `resolve` accepts it, so every reference in a
+    dig result is one it can follow straight back in.
     """
+    from .models import AmbiguousHandle, InvariantError
+    from .store import resolve
+
+    try:
+        node_id = resolve(connection, handle)
+    except AmbiguousHandle as error:
+        # Ambiguity is not absence. Collapsing the two tells the agent nothing
+        # matched when in fact several did, and the natural next move -- write a
+        # new node, because memory apparently lacks this -- creates the
+        # duplicate the store can never merge.
+        return {"error": str(error)}
+    except InvariantError:
+        return None
+
     row = connection.execute(
         f"SELECT rowid, id, superseded_by, parent, {', '.join(DIG_FIELDS)} "
-        "FROM nodes WHERE title = ?",
-        (title,),
+        "FROM nodes WHERE id = ?",
+        (node_id,),
     ).fetchone()
     if row is None:
         return None
 
-    def title_of(node_id: str | None) -> str | None:
-        if not node_id:
+    def claim_of(other_id: str | None) -> str | None:
+        if not other_id:
             return None
         found = connection.execute(
-            "SELECT title FROM nodes WHERE id = ?", (node_id,)
+            "SELECT claim FROM nodes WHERE id = ?", (other_id,)
         ).fetchone()
-        return found["title"] if found else None
+        return found["claim"] if found else None
 
     node = {field: row[field] for field in DIG_FIELDS}
+    node["id"] = row["id"]
     node["about_user"] = None if row["about_user"] is None else bool(row["about_user"])
     node["stale"] = bool(row["stale"])
-    node["superseded_by"] = title_of(row["superseded_by"])
-    node["parent"] = title_of(row["parent"])
+    node["superseded_by"] = claim_of(row["superseded_by"])
+    node["parent"] = claim_of(row["parent"])
     node["supersedes"] = [
-        found["title"] for found in connection.execute(
-            "SELECT title FROM nodes WHERE superseded_by = ?", (row["id"],)
+        found["claim"] for found in connection.execute(
+            "SELECT claim FROM nodes WHERE superseded_by = ?", (row["id"],)
         )
     ]
     node["edges"] = [
-        {"rel": edge["rel"], "to": edge["title"]}
+        {"rel": edge["rel"], "to": edge["claim"]}
         for edge in connection.execute(
-            "SELECT e.rel, n.title FROM node_edges AS e "
+            "SELECT e.rel, n.claim FROM node_edges AS e "
             "JOIN nodes AS n ON n.id = e.dst_id WHERE e.src_id = ?",
             (row["id"],),
         )
@@ -299,12 +312,14 @@ def dig(connection: sqlite3.Connection, title: str) -> dict[str, Any] | None:
     return node
 
 
-def render_dig(node: dict[str, Any] | None, title: str = "") -> str:
+def render_dig(node: dict[str, Any] | None, handle: str = "") -> str:
     """Render a dig result as the literal text the agent receives."""
     if node is None:
-        return f"No memory titled {title!r}."
+        return f"No memory matching {handle!r}."
+    if "error" in node:
+        return f"# {handle}\n{node['error']}"
 
-    lines = [f"# {node['title']}"]
+    lines = [f"# {node['claim']}", f"id: {node['id']}"]
     for field in ("type", "about_user", "scope", "origin", "stale", "updated"):
         if node[field] is not None:
             lines.append(f"{field}: {node[field]}")
@@ -321,8 +336,57 @@ def render_dig(node: dict[str, Any] | None, title: str = "") -> str:
         lines.append(f"supersedes: {', '.join(node['supersedes'])}")
     for edge in node["edges"]:
         lines.append(f"{edge['rel']}: {edge['to']}")
-    lines.extend(["", node["summary"]])
+    if node["detail"]:
+        lines.extend(["", node["detail"]])
     return "\n".join(lines)
+
+
+def render_digs(nodes: list[tuple[str, dict[str, Any] | None]]) -> str:
+    """Several digs in one result.
+
+    A tool call re-sends the cached prefix and is billed for it once per call,
+    so N separate digs cost N times what one batched call costs. Multi-node
+    reads are the normal case — a search hands back several candidate rows — so
+    batching is the default shape rather than an optimisation.
+    """
+    return "\n\n---\n\n".join(render_dig(node, handle) for handle, node in nodes)
+
+
+def dig_context(
+    connection: sqlite3.Connection, title: str, window: int = 3
+) -> dict[str, Any] | None:
+    """The transcript excerpt a node's source points at.
+
+    dig() prints locator/source_session as bare ids -- a jump-to-context
+    anchor an agent could always follow by hand, but nothing before this did
+    the following. Only resolves session-sourced nodes: a derived (ingested)
+    node's locator is a `file#anchor` into a wiki file, and its detail is
+    already that file's text verbatim, so there is nothing further to fetch.
+    """
+    from .models import InvariantError
+    from .store import resolve
+
+    try:
+        node_id = resolve(connection, title)
+    except InvariantError:
+        return None
+    row = connection.execute(
+        "SELECT locator, source_session FROM nodes WHERE id = ?", (node_id,)
+    ).fetchone()
+    if row is None or not row["locator"] or not row["source_session"]:
+        return None
+    return transcript.excerpt(row["source_session"], row["locator"], window=window)
+
+
+def render_transcript(excerpt: dict[str, Any] | None, title: str = "") -> str:
+    if excerpt is None:
+        return f"No resolvable transcript context for {title!r}."
+    lines = [f"# transcript around {title!r}", excerpt["path"], ""]
+    for message in excerpt["messages"]:
+        marker = ">>> " if message["is_hit"] else ""
+        lines.append(f"{marker}[{message['role']}] {message['text']}")
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
 
 
 def should_retrieve(message: str, min_content_words: int = MIN_CONTENT_WORDS) -> bool:
@@ -350,13 +414,12 @@ def assemble_t1(
 
     always_and_current = connection.execute(
         f"""
-        SELECT id, title, summary, type, scope, window_start, window_end
+        SELECT id, claim, detail, type, scope, window_start, window_end
         FROM nodes
         WHERE superseded_by IS NULL
           AND scope IN ({scope_placeholders})
           AND (
-                type IN ('meta', 'conv-pref')
-             OR (about_user = 1 AND type = 'fact'
+                (about_user = 1 AND type = 'fact'
                  AND stale = 0
                  AND (window_end IS NULL OR date('now') <= window_end)
                  AND (window_start IS NULL
@@ -374,7 +437,7 @@ def assemble_t1(
         recent.extend(
             connection.execute(
                 f"""
-                SELECT id, title, summary, type, scope, window_start, window_end
+                SELECT id, claim, detail, type, scope, window_start, window_end
                 FROM nodes
                 WHERE superseded_by IS NULL
                   AND stale = 0
@@ -392,23 +455,38 @@ def assemble_t1(
 
 
 def render_t1(nodes: list[dict[str, Any]]) -> str:
-    """Render the autoload block that gets injected at session start."""
-    if not nodes:
-        return ""
+    """The autoload block injected at session start: prefs whole, nodes as claims.
+
+    Two populations with opposite economics, so they are rendered by opposite
+    rules. The pref files are bounded and behavioural — a rule the agent has to
+    fetch is a rule it will not follow — so they go in verbatim. Nodes grow
+    without limit and are looked up on demand, so they contribute one line each
+    and pay for their detail only when something digs.
+    """
+    from . import settings
+
+    sections = []
+    prefs = settings.render()
+    if prefs:
+        # Before the nodes: these are the instructions for reading everything
+        # under them, and a reader who meets the facts first has already read
+        # them wrong.
+        sections.append(prefs)
+
     by_type: dict[str, list[dict[str, Any]]] = {}
     for node in nodes:
         by_type.setdefault(node["type"], []).append(node)
 
-    # meta first: it is the instructions for reading everything under it, and a
-    # reader who meets the facts before the rules has already read them wrong.
-    ordered = sorted(by_type, key=lambda name: (name != "meta", name))
-
-    lines = ["# Memory"]
-    for node_type in ordered:
-        lines.append(f"\n## {node_type}")
+    for node_type in sorted(by_type):
+        lines = [f"## {node_type}"]
         for node in by_type[node_type]:
             window = ""
             if node.get("window_start") or node.get("window_end"):
                 window = f" [{node.get('window_start') or ''}..{node.get('window_end') or ''}]"
-            lines.append(f"- {node['summary']}{window}")
-    return "\n".join(lines)
+            marker = DETAIL_MARKER if node.get("detail") else ""
+            lines.append(f"- {node['claim']}{marker}{window}")
+        sections.append("\n".join(lines))
+
+    if not sections:
+        return ""
+    return "\n\n".join(["# Memory", *sections])

@@ -7,17 +7,16 @@ node_revisions.
 
 from __future__ import annotations
 
-import json
 import os
 import sqlite3
 import uuid
 from functools import lru_cache
-from pathlib import Path
 from typing import Any, Iterable
 
-from . import embed
+from . import embed, transcript
 from .models import (
     TYPES_NEVER_SUPERSEDED,
+    AmbiguousHandle,
     InvariantError,
     Node,
     now,
@@ -26,7 +25,7 @@ from .models import (
 )
 
 NODE_COLUMNS = (
-    "id", "title", "summary", "type", "about_user", "scope",
+    "id", "claim", "detail", "type", "about_user", "scope",
     "window_start", "window_end", "stale", "superseded_by", "origin",
     "parent", "derived_from", "content_hash", "locator", "source_session",
     "updated",
@@ -48,53 +47,46 @@ def _unique_id(connection: sqlite3.Connection, candidate: str) -> str:
     return identifier
 
 
-def _unique_title(connection: sqlite3.Connection, candidate: str) -> str:
-    """Suffix a colliding title until it is free."""
-    title = candidate
-    suffix = 2
-    while connection.execute(
-        "SELECT 1 FROM nodes WHERE title = ?", (title,)
-    ).fetchone():
-        title = f"{candidate} ({suffix})"
-        suffix += 1
-    return title
-
-
-def _retire_title(connection: sqlite3.Connection, node_id: str, title: str) -> None:
-    """Free a title held by a node being superseded, suffixing the old holder.
-
-    A title names a concept, not a version, so the current node has to be the one
-    it resolves to. The alternative — letting the newcomer take the suffix —
-    means every re-statement pushes the live node further from its natural name
-    while the bare title keeps pointing at something dead.
-
-    Superseded nodes are excluded from retrieval anyway, so the suffixed title is
-    only ever reached by deliberately digging through history.
-    """
-    connection.execute(
-        "UPDATE nodes SET title = ? WHERE id = ?",
-        (_unique_title(connection, title), node_id),
-    )
-
-
 def resolve(connection: sqlite3.Connection, handle: str) -> str:
-    """Resolve a title or an id to an id.
+    """Resolve an id, an exact claim, or an unambiguous claim fragment to an id.
 
-    Everything an agent is shown carries a title and never an id, so any handle
-    it hands back is a title. Ids stay accepted because the ingest and the tests
-    hold them directly, but a title has to work or supersede and stale are
-    unreachable from the only surface that uses them.
+    v0 resolved by title, which was unique and therefore always safe. Claims are
+    deliberately not unique -- uniqueness would only produce "(2)" suffixes in
+    text that is now rendered verbatim -- so resolution has to tolerate
+    collisions instead of preventing them. Three passes, narrowest first:
+
+    1. `id`, which retrieval now prints and is always exact;
+    2. an exact claim, for the case where the agent copied the rendered line;
+    3. a case-insensitive fragment, which is how a human-written handle usually
+       arrives ("Discovery card").
+
+    An ambiguous fragment raises rather than guessing, and names the candidates
+    by id -- picking the first match would silently supersede the wrong node,
+    and that is unrecoverable in an append-only store.
     """
-    row = connection.execute(
-        "SELECT id FROM nodes WHERE title = ?", (handle,)
-    ).fetchone()
-    if row is not None:
-        return row["id"]
-    if connection.execute(
-        "SELECT 1 FROM nodes WHERE id = ?", (handle,)
-    ).fetchone():
+    if connection.execute("SELECT 1 FROM nodes WHERE id = ?", (handle,)).fetchone():
         return handle
-    raise InvariantError(f"no node titled {handle!r}")
+
+    exact = connection.execute(
+        "SELECT id FROM nodes WHERE claim = ?", (handle,)
+    ).fetchall()
+    if len(exact) == 1:
+        return exact[0]["id"]
+
+    candidates = exact or connection.execute(
+        "SELECT id, claim FROM nodes WHERE claim LIKE ? AND superseded_by IS NULL",
+        (f"%{handle}%",),
+    ).fetchall()
+
+    if not candidates:
+        raise InvariantError(f"no node matching {handle!r}")
+    if len(candidates) > 1:
+        listed = ", ".join(row["id"] for row in candidates[:8])
+        raise AmbiguousHandle(
+            f"{handle!r} matches {len(candidates)} nodes ({listed}); "
+            "use the id printed by search or dig"
+        )
+    return candidates[0]["id"]
 
 
 def _next_revision(connection: sqlite3.Connection, node_id: str) -> int:
@@ -109,24 +101,25 @@ def _record_revision(
     connection: sqlite3.Connection,
     node_id: str,
     op: str,
-    summary: str | None,
+    claim: str | None,
+    detail: str | None,
     capture_run_id: str | None,
 ) -> None:
     connection.execute(
         """
-        INSERT INTO node_revisions (node_id, revision, op, summary,
+        INSERT INTO node_revisions (node_id, revision, op, claim, detail,
                                     capture_run_id, recorded_at)
-        VALUES (?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         """,
-        (node_id, _next_revision(connection, node_id), op, summary,
+        (node_id, _next_revision(connection, node_id), op, claim, detail,
          capture_run_id, now()),
     )
 
 
 def _index(connection: sqlite3.Connection, rowid: int, node: Node) -> None:
     connection.execute(
-        "INSERT INTO nodes_fts (rowid, title, summary, keywords) VALUES (?, ?, ?, ?)",
-        (rowid, node.title or "", node.summary, node.lexical_keywords()),
+        "INSERT INTO nodes_fts (rowid, claim, detail, keywords) VALUES (?, ?, ?, ?)",
+        (rowid, node.claim, node.detail or "", node.lexical_keywords()),
     )
     vector = embed.encode_one(node.embedding_text())
     connection.execute(
@@ -139,13 +132,12 @@ def _insert(
     connection: sqlite3.Connection, node: Node, capture_run_id: str | None
 ) -> str:
     validate(node)
-    node.title = _unique_title(connection, node.title)
     node.updated = node.updated or now()
     cursor = connection.execute(
         f"INSERT INTO nodes ({', '.join(NODE_COLUMNS)}) "
         f"VALUES ({', '.join('?' * len(NODE_COLUMNS))})",
         (
-            node.id, node.title, node.summary, node.type,
+            node.id, node.claim, node.detail, node.type,
             None if node.about_user is None else int(node.about_user),
             node.scope, node.window_start, node.window_end, int(node.stale),
             node.superseded_by, node.origin, node.parent, node.derived_from,
@@ -153,7 +145,9 @@ def _insert(
         ),
     )
     _index(connection, cursor.lastrowid, node)
-    _record_revision(connection, node.id, "insert", node.summary, capture_run_id)
+    _record_revision(
+        connection, node.id, "insert", node.claim, node.detail, capture_run_id
+    )
     return node.id
 
 
@@ -164,7 +158,7 @@ def _supersede(
     capture_run_id: str | None,
 ) -> str:
     target = connection.execute(
-        "SELECT id, type, title, superseded_by FROM nodes WHERE id = ?", (old_id,)
+        "SELECT id, type, claim, superseded_by FROM nodes WHERE id = ?", (old_id,)
     ).fetchone()
 
     if target is None:
@@ -180,35 +174,16 @@ def _supersede(
             f"{target['superseded_by']!r}"
         )
 
-    if new_node.title == target["title"]:
-        _retire_title(connection, target["id"], target["title"])
-
+    # No title to retire: v0 had to hand the bare name back to whichever node was
+    # currently true, because the name was the handle. The handle is now the id,
+    # which never moves, so a supersession is a plain insert plus a pointer.
     new_id = _insert(connection, new_node, capture_run_id)
     connection.execute(
         "UPDATE nodes SET superseded_by = ?, updated = ? WHERE id = ?",
         (new_id, now(), old_id),
     )
-    _record_revision(connection, old_id, "supersede", None, capture_run_id)
+    _record_revision(connection, old_id, "supersede", None, None, capture_run_id)
     return new_id
-
-
-def _is_authored_message(message: dict) -> bool:
-    """True for something Eric actually typed, not a tool_result echoed back as
-    a user-role turn -- the Anthropic API's convention for feeding tool output
-    back into the conversation. A transcript's most recent role=user event is
-    very often the harness's own tool-result turn, not Eric's last message; a
-    locator pointing at a raw tool_result blob is far less useful than one
-    pointing at what he actually asked.
-    """
-    content = message.get("content")
-    if isinstance(content, str):
-        return bool(content.strip())
-    if isinstance(content, list):
-        return any(
-            isinstance(block, dict) and block.get("type") == "text"
-            for block in content
-        )
-    return False
 
 
 @lru_cache(maxsize=1)
@@ -237,26 +212,20 @@ def _live_transcript_uuid() -> str | None:
     session_id = os.environ.get("CLAUDE_CODE_SESSION_ID")
     if not session_id:
         return None
-    projects_dir = Path(os.environ.get(
-        "CLAUDE_MEMORY_TRANSCRIPTS_DIR", str(Path.home() / ".claude" / "projects")
-    ))
+    path = transcript.find_transcript(session_id)
+    if path is None:
+        return None
+
     try:
-        matches = list(projects_dir.glob(f"**/{session_id}.jsonl"))
-        if not matches:
-            return None
-        lines = matches[0].read_text(encoding="utf-8", errors="replace").splitlines()
+        events = list(transcript.iter_events(path))
     except OSError:
         return None
 
-    for line in reversed(lines):
-        try:
-            event = json.loads(line)
-        except json.JSONDecodeError:
-            continue
+    for event in reversed(events):
         message = event.get("message")
         if (
             isinstance(message, dict) and message.get("role") == "user"
-            and event.get("uuid") and _is_authored_message(message)
+            and event.get("uuid") and transcript.is_authored_message(message)
         ):
             return event["uuid"]
     return None
@@ -268,8 +237,10 @@ def _node_from_spec(connection: sqlite3.Connection, spec: dict[str, Any]) -> Nod
         for key, value in spec.items()
         if key not in {"op", "supersedes", "error", "id"}
     }
-    if fields.get("title"):
-        fields["title"] = fields["title"].strip()
+    if fields.get("claim"):
+        fields["claim"] = " ".join(fields["claim"].split())
+    if isinstance(fields.get("detail"), str):
+        fields["detail"] = fields["detail"].strip() or None
     is_original = fields.get("origin", "original") == "original"
     live_session = os.environ.get("CLAUDE_CODE_SESSION_ID")
     if is_original and fields.get("source_session") is None:
@@ -299,7 +270,7 @@ def _node_from_spec(connection: sqlite3.Connection, spec: dict[str, Any]) -> Nod
         if live_uuid:
             fields["locator"] = live_uuid
 
-    identifier = spec.get("id") or slugify(fields.get("title") or spec["summary"])
+    identifier = spec.get("id") or slugify(fields.get("claim") or "")
     return Node(id=_unique_id(connection, identifier), **fields)
 
 
@@ -362,7 +333,7 @@ def set_stale(
     connection.execute(
         "UPDATE nodes SET stale = 1, updated = ? WHERE id = ?", (now(), node_id)
     )
-    _record_revision(connection, node_id, "stale", None, capture_run_id)
+    _record_revision(connection, node_id, "stale", None, None, capture_run_id)
     connection.commit()
 
 

@@ -19,38 +19,81 @@ once; derive its tier at load time. Time passing re-tiers automatically.
 No T3. BM25 covers exact/rare terms (names, IDs, error strings); vector covers semantic
 recall. Redundancy is handled by abstraction nodes, not another tier.
 
+## Claim and detail
+
+Every node is an **8-word claim** plus optional **detail**. Only the claim is ever
+rendered; `dig` returns the detail.
+
+v0 stored a `summary` contracted to be one sentence. It averaged **684 characters** —
+not through carelessness, but because detail had nowhere else to live. Two things
+followed. Autoload grew without bound, since a fact leaves T1 only by supersession or an
+expired window. And supersession lost its granularity: correcting one clause of a
+six-claim paragraph meant rewriting the paragraph, so nobody did.
+
+The cap is in **words, not characters**. A character budget produces truncation-shaped
+prose; a word budget forces the function words out, which is what turns *"After arriving
+in Ann Arbor, Eric will apply for a Discovery credit card"* into *"Eric will apply for
+Discovery card"*. Dates never belong in a claim — the window renders itself.
+
+Compression is a **display** decision. Both FTS and the vector index cover claim *and*
+detail, so nothing becomes unfindable by being unrendered. A rendered claim carries a
+trailing `+` when detail exists, so digging is an informed choice rather than a gamble
+on whether the eight words were the whole node.
+
 ## Node types
 
 | Type | Meaning | Time |
 |---|---|---|
-| `raw` | Unread source text — a document section, chunked and indexed but not judged | — |
 | `fact` | A proposition true **at least since** `window_start` | `[window_start, window_end]`; null end = unknown |
 | `action` | Someone did something — user, agent, or third party | `window_start` (= end, or a range if durative) |
 | `todo` | Something necessary or decided — a todo list or calendar item | `window_end` = due date, if any |
 | `intention` | Someone wants to and may do something — not yet committed | when expressed |
 | `idea` | A thought or proposal, large or small | when thought |
-| `meta` | How this memory system works | — |
-| `conv-pref` | How the agent should communicate or behave | — |
-| `code-pref` | A coding constraint or convention | — |
 
-### `raw`, and refinement on demand
+Rules are **not** node types. `meta`, `conv-pref` and `code-pref` are files in
+`settings/` — see below. `raw` was removed in 0.1.0 and returns in 0.2.0.
 
-Ingesting a wiki page cannot produce facts. A markdown section is prose that may
-contain zero claims or twenty, and typing it as a `fact` about the world asserts
-something the ingest never checked. So sections land as `raw`: chunked on headings,
-embedded, searchable — and explicitly *not* believed. `raw` carries no `about_user`,
-because nothing has read it closely enough to answer that.
+## Rules are files, not nodes
 
-Raw nodes are scored at `0.6 ×` the fused RRF score, so they surface but yield to any
-refined node covering the same ground. When one does surface and an agent actually reads
-it, the search result carries a hint: extract the claims and `supersede` the chunk with
-them. Refinement is therefore paid for by attention already spent on a real question,
-rather than by a batch LLM pass over 500 chunks that no one will ever ask about. The
-corpus sharpens along the paths that get used.
+A fact has a history; a rule has only a current form. Storing rules as nodes bought
+immutability nobody wanted and cost the one operation that mattered: **consolidation**.
+Thirteen conv-prefs accumulated in four days of use, several restating each other,
+because a node can only be appended or superseded — never merged. A file can be
+rewritten in place.
 
-Because supersession pointers would be destroyed by re-ingest — which deletes and rewrites
-a file's derived nodes — they are carried across by section id, which is stable as long as
-the heading survives. A rename loses the link but never the refined node.
+| File | Preloaded | Holds |
+|---|---|---|
+| `settings/meta.md` | yes | How this memory system works |
+| `settings/conv.md` | yes | How the agent should communicate and behave |
+| `settings/code.md` | no — `code-prefs` skill | Coding constraints and conventions |
+
+They live in `settings/` beside the store, deliberately **not** under `~/.claude/`, which
+belongs to the Claude Code harness. `CLAUDE_MEMORY_SETTINGS` relocates the whole
+directory. HTML comments are stripped before a file reaches context, so these files can
+carry editorial notes for free.
+
+### `raw`, and why refinement on demand failed
+
+Ingested wiki sections landed as `raw`: chunked on headings, embedded, searchable — and
+explicitly not believed. That part was sound. The mistake was the plan for improving
+them.
+
+Raw nodes were scored at `0.6 ×` the fused RRF score so they would yield to any refined
+node covering the same ground, and a search hint invited the agent to extract the claims
+and supersede the chunk. Refinement would then be paid for by attention already spent on
+a real question, rather than by a batch pass over 500 chunks nobody would ask about.
+
+**Measured after four days of daily use: 518 raw nodes, 0 refined.** Not slow uptake —
+zero. A hint competes with the task, and the task always wins; the same lesson the `Stop`
+hook was invented to encode. The demotion was collateral damage: with nothing ever
+refined, there was no counterpart for a raw hit to lose to, so 0.6 only made raw weaker
+at the one job it did well.
+
+0.1.0 removes `raw` entirely. 0.2.0 reintroduces it with a **per-query cap** — bounding
+how many raw hits a single search may return, which controls the flood regardless of
+corpus size and, unlike the demotion, does not depend on a refinement pass that never
+happens. Re-ingest is lossless now that nothing refines a chunk into something worth
+preserving, so dropping them costs nothing but a rebuild.
 
 A `fact` asserts truth *from* `window_start`, **not** present truth. So a fact node is
 never falsified by the passage of time — only superseded. "Fizz rebranded to Mine in
@@ -117,17 +160,24 @@ purposes.
 T1 is **categorical, not ranked** — take these sets whole, capping only the volatile
 types. No priority function is needed.
 
+T1 has two halves with opposite economics, so they are assembled by opposite rules.
+
+**The pref files** (`settings/meta.md`, `settings/conv.md`) go in **whole**. They are
+behavioural: a rule the agent must fetch is a rule it will not follow. They are also
+bounded, because a file can be rewritten — the reason they stopped being nodes.
+
+**Nodes** contribute **one claim each**, because they grow without limit and are looked
+up on demand. Categorical, not ranked — take these sets whole, capping only the volatile
+types.
+
 | Set | Rule |
 |---|---|
-| `meta` | all |
-| `conv-pref` | all |
 | `fact` | `about_user`, not yet ended, starting within `lead_time` |
 | `todo` | `about_user` and still open |
 | `idea`, `action`, `intention` | `about_user`, 3 most recent of each |
 
 ```sql
-   type IN ('meta', 'conv-pref')
-OR (about_user AND type = 'fact'
+   (about_user AND type = 'fact'
     AND NOT stale
     AND (window_end IS NULL OR date('now') <= window_end)
     AND (window_start IS NULL
@@ -138,9 +188,15 @@ OR (about_user AND type = 'todo'
 -- autoload set = global-T1 + project-T1 (current project only)
 ```
 
-`code-pref` is **not** autoloaded — meta instead tells the agent to fetch code-pref nodes
-when it is about to write code, keeping coding conventions out of every non-coding
-session's budget.
+`settings/code.md` is **not** preloaded — it is the largest of the three files and
+irrelevant to every session that writes no code. It is reached through the `code-prefs`
+skill, and `meta.md`, which *is* preloaded, carries the trigger line. That last part is
+not decoration: this codebase already ran the experiment where a hint was supposed to
+prompt on-demand work, and got zero uptake in 518 opportunities. The instruction has to
+be in context before the moment it applies.
+
+Measured on the reference store, this took autoload from 19,969 characters to 8,158 —
+and, more importantly, changed the growing term from ~684 characters per fact to ~67.
 
 A fact enters T1 once its window starts within `lead_time` (30 days) and stays until the
 window ends. The UMich enrolment autoloads from 2026-07-06 onward; a fact starting in
@@ -188,21 +244,27 @@ the daemon first and falls back to computing in-process if nothing answers yet, 
 message is never dropped just because the daemon has not come up. The daemon persists
 deliberately, with no idle timeout — `python -m claude_memory daemon status` / `stop`.
 
-**Titles are the agent-facing handle.** They are required and unique, and retrieval prints
-one per hit, so an agent that wants a node in full digs by the title it was just shown —
-getting the untruncated summary, the time window, staleness, and every link resolved to a
-title rather than an id, since ids never appear in what the agent saw. Uniqueness is
-enforced by index, not convention: a duplicate makes a dig silently ambiguous.
+**The id is the handle; the claim is what gets shown.** v0 used a unique `title` for both,
+which worked only because the title was never rendered into context. Once the handle *is*
+the displayed text, uniqueness becomes a liability: collisions can only be resolved by
+suffixing, and `Ann Arbor apartment (2)` is meaningless as English in a block the agent
+reads as fact. Claims are therefore not unique, and `resolve` accepts an id, an exact
+claim, or an unambiguous fragment.
 
-Supersession **transfers** the title to the successor and suffixes the retired node. A
-title names a concept, not a version, so it has to resolve to whatever is currently true;
-the alternative pushes the live node further from its natural name on every restatement
-while the bare title keeps pointing at something dead.
+**Ambiguity is not absence.** A fragment matching several nodes raises `AmbiguousHandle`
+and lists the ids, rather than returning "not found". Collapsing the two is worse than it
+sounds: told that nothing matched, the agent's correct next move is to write the memory —
+producing a duplicate an append-only store can never merge.
 
-Retrieved hits render as one bare row each — `type, date, title, content`, under a single
-`# memory that could be useful:` heading. Nothing else. Standing instructions for reading
-them, including what a `raw` hit means and when to dig, live once in `meta`: guidance
-repeated on every message is a per-message tax.
+Supersession no longer moves anything. The id never changes, so a supersession is an
+insert plus a pointer.
+
+Retrieved hits render as one bare row each — `type, date, claim`, under a single
+`# memory that could be useful:` heading. Nothing else, and **nothing truncated**: v0
+clipped content at 400 characters and had to instruct the agent to dig "whenever a
+truncated row looks like it matters", which made dig repair work for a renderer that
+could not tell the whole truth. A claim is complete by construction, so a row is either
+the whole node or a claim plus `+`.
 
 **Both search paths exclude what T1 already loaded.** Retrieval competes for a budget the
 autoload set has already spent, and a node returned verbatim into context it is already in
@@ -211,12 +273,32 @@ one source counted twice. The exclusion happens in SQL, before `LIMIT`, or the d
 rows would consume result slots and silently shrink the result set.
 
 T1 **replaces the global `CLAUDE.md`**, which is retired (archived at
-`archive/global-CLAUDE.md.retired`). Its rules were migrated to nodes first: coding
-conventions to `code-pref`, tool and formatting habits to `conv-pref`, and its
-memory-maintenance rules folded into the `meta` node, since they described routing into
-the very file being retired. The behavioural change is real — `code-pref` is not
-autoloaded, so those conventions now depend on the agent searching for them, which `meta`
-instructs it to do before writing code.
+`archive/global-CLAUDE.md.retired`). Its rules became nodes in v0 and files again in
+0.1.0 — coding conventions in `settings/code.md`, tool and formatting habits in
+`settings/conv.md`, memory-maintenance rules in `settings/meta.md`.
+
+That round trip is worth naming honestly. `CLAUDE.md` was a file, and files were replaced
+by nodes to get retrieval, scoping and time windows. Rules turned out to want none of
+those: they have no window, they are needed unconditionally or not at all, and what they
+did want — merging — is exactly what a node cannot do. Facts kept the node store; rules
+went home. The thing that changed is not the storage medium but which properties each
+kind of memory actually needs.
+
+### Versioning and migration
+
+The schema version lives in `PRAGMA user_version` and is set only by `migrate` or by
+creating a fresh store — never as a side effect of connecting, since every statement in
+`schema.sql` is `IF NOT EXISTS` and would silently no-op against an old store, leaving
+the stamp as the only trustworthy signal.
+
+`SessionStart` compares the two and, on a mismatch, replaces the entire autoload block
+with an upgrade notice. Replaces rather than prepends: a half-converted store renders
+claims that are still null, and a stale-looking-normal block is worse than none.
+
+See `MIGRATION-0.1.0.md`. The deterministic half is one command; rewriting summaries into
+claims is a judgement call per node and is driven by an agent through a `claim IS NULL`
+cursor, so it is idempotent and resumable across sessions rather than something that must
+survive one context window.
 
 ### Agent-facing API
 
@@ -228,16 +310,24 @@ an embedding, and search requires embedding the query — neither is expressible
 | `remember(nodes)` | insert / supersede, batched |
 | `search(query, k, scope)` | hybrid RRF retrieval |
 | `assemble_t1(scope)` | the categorical T1 set |
-| `ingest(path)` | heading-split a file or folder |
+| `dig(handles...)` | expand nodes by id or claim, batched |
+| `migrate()` | upgrade an older store |
 | `sql(query)` | **read-only** escape hatch for the long tail |
+
+`search` and `dig` both take several arguments per call. A tool call is billed for its
+cached prefix once, so three queries in one call cost a fraction of three calls — and
+multi-angle search is the normal way a node actually gets found, not an optimisation.
 
 Since the layer must exist anyway, it also enforces the invariants the agent would
 otherwise violate silently:
 
-- **Summaries are immutable** — no `UPDATE` on `summary`, only insert + supersede
+- **Claims are immutable** — no `UPDATE` on `claim` or `detail`, only insert + supersede
+- **Claims are at most 8 words** — the cap the autoload budget rests on
+- Retired types (`conv-pref`, `code-pref`, `meta`) are rejected *by name*, pointing at the
+  file they moved to; a bare "unknown type" would send the agent hunting for a typo
 - Supersession writes both sides and appends revisions stamped with `capture_run_id`
 - Never supersede an `idea` or an umbrella `intention`
-- `about_user` required for `fact`/`action`/`todo`/`intention`, null for `meta`/prefs
+- `about_user` required for `fact`/`action`/`todo`/`intention`, null for `idea`
 - `window_start <= window_end`; supersede target exists; no self or cyclic supersession
 - `origin = 'original'` nodes are protected from `reindex`
 - Writes keep `nodes_fts` and `nodes_vec` in sync with `nodes`
@@ -329,107 +419,21 @@ flat index only — it is pre-v1 and single-maintainer, but touches only the dis
 layer. Embeddings: FastEmbed `bge-small-en-v1.5` (384-dim), CPU, no torch dependency. No
 ANN — 10k nodes ≈ 15 MB of floats, brute force is single-digit ms. Fallback: LanceDB.
 
-```sql
-PRAGMA journal_mode = WAL;
-PRAGMA foreign_keys = ON;
+**The schema lives in [`claude_memory/schema.sql`](claude_memory/schema.sql)**, not here.
+This section used to inline a copy, and by 0.1.0 it had drifted: it still declared
+`title`, `summary`, a `priority` column that was never implemented, and the pref types
+that are now files. A second copy of a schema is a second thing to forget to update.
 
-CREATE TABLE nodes (
-    id              TEXT PRIMARY KEY,
-    title           TEXT,
-    summary         TEXT NOT NULL,          -- immutable
-    type            TEXT NOT NULL,          -- fact|action|todo|intention|idea|
-                                            -- meta|conv-pref|code-pref
-    about_user      INTEGER,                -- fact/action/todo/intention only
-    scope           TEXT NOT NULL DEFAULT 'global',
-    window_start    TEXT,
-    window_end      TEXT,
-    stale           INTEGER NOT NULL DEFAULT 0,
-    superseded_by   TEXT REFERENCES nodes(id),
-    origin          TEXT NOT NULL,          -- original | derived
-    parent          TEXT REFERENCES nodes(id),
-    derived_from    TEXT,
-    content_hash    TEXT,
-    locator         TEXT,
-    source_session  TEXT,
-    priority        REAL NOT NULL DEFAULT 0,
-    updated         TEXT NOT NULL
-);
-
-CREATE INDEX nodes_window     ON nodes(window_start, window_end);
-CREATE INDEX nodes_scope      ON nodes(scope);
-CREATE INDEX nodes_type       ON nodes(type);
-CREATE INDEX nodes_parent     ON nodes(parent);
-CREATE INDEX nodes_superseded ON nodes(superseded_by);
-
-CREATE TABLE node_revisions (
-    node_id         TEXT NOT NULL,
-    revision        INTEGER NOT NULL,
-    op              TEXT NOT NULL,          -- insert | supersede | delete
-    summary         TEXT,
-    capture_run_id  TEXT,
-    recorded_at     TEXT NOT NULL,
-    PRIMARY KEY (node_id, revision)
-);
-
-CREATE INDEX node_revisions_run ON node_revisions(capture_run_id);
-
--- 1:1 relations stay as columns above (superseded_by, parent, derived_from) because
--- they sit on the hot retrieval filters. Everything 1:many or many:many lives here.
-CREATE TABLE node_edges (
-    src_id  TEXT NOT NULL REFERENCES nodes(id),
-    dst_id  TEXT NOT NULL REFERENCES nodes(id),
-    rel     TEXT NOT NULL,                  -- motivates | relates
-    PRIMARY KEY (src_id, dst_id, rel)
-);
-
-CREATE INDEX node_edges_dst ON node_edges(dst_id, rel);
-
--- unicode61, not porter: stemming hurts exact identifier matching, and this
--- corpus is dense with code identifiers and proper nouns.
-CREATE VIRTUAL TABLE nodes_fts USING fts5(
-    title, summary, keywords,
-    tokenize = 'unicode61 remove_diacritics 2'
-);
-
-CREATE VIRTUAL TABLE nodes_vec USING vec0(
-    node_rowid INTEGER PRIMARY KEY,
-    embedding  FLOAT[384]
-);
-```
+The shape worth stating in prose, because it is a design decision rather than a detail:
+1:1 relations (`superseded_by`, `parent`, `derived_from`) are columns on `nodes` because
+they sit on the hot retrieval filters; everything 1:many or many:many lives in
+`node_edges`. `nodes_fts` and `nodes_vec` align by `rowid` with `nodes`, index claim
+*and* detail, and are both disposable — rebuilt wholesale by `migrate` or any reindex.
 
 ### Hybrid retrieval (RRF)
 
 `bm25()` returns negative scores — more negative is better, so ascending is best-first.
 Over-fetch then filter: sqlite-vec KNN returns a global top-k.
-
-```sql
-WITH lexical AS (
-    SELECT rowid AS node_rowid,
-           ROW_NUMBER() OVER (ORDER BY bm25(nodes_fts)) AS rank
-    FROM nodes_fts
-    WHERE nodes_fts MATCH :query
-    LIMIT :candidate_k
-),
-semantic AS (
-    SELECT node_rowid,
-           ROW_NUMBER() OVER (ORDER BY distance) AS rank
-    FROM nodes_vec
-    WHERE embedding MATCH :query_embedding
-      AND k = :candidate_k
-)
-SELECT n.id, n.title, n.summary, n.type,
-       COALESCE(1.0 / (:rrf_k + l.rank), 0)
-     + COALESCE(1.0 / (:rrf_k + s.rank), 0) AS score
-FROM nodes n
-LEFT JOIN lexical  l ON l.node_rowid = n.rowid
-LEFT JOIN semantic s ON s.node_rowid = n.rowid
-WHERE (l.rank IS NOT NULL OR s.rank IS NOT NULL)
-  AND n.scope IN ('global', :project_scope)
-  AND n.parent IS NULL                      -- collapse to abstraction parents
-  AND n.superseded_by IS NULL               -- current versions only
-ORDER BY score DESC
-LIMIT :final_k;
-```
 
 Dig-down replaces `parent IS NULL` with `parent = :abstraction_id`. History queries drop
 the `superseded_by` clause.

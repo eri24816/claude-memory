@@ -10,8 +10,8 @@ from claude_memory import db, retrieval, store
 from claude_memory.models import InvariantError
 
 UMICH = {
-    "title": "MSCSE at University of Michigan",
-    "summary": (
+    "claim": "MSCSE at University of Michigan",
+    "detail": (
         "Eric is enrolled in the MSCSE program at University of Michigan EECS "
         "from 2026-08-05, with expected graduation in spring 2028."
     ),
@@ -21,10 +21,12 @@ UMICH = {
     "window_end": "2028-05-31",
 }
 
+# A world fact rather than a preference: preferences are files in v1, and
+# `remember` rejects them outright.
 CHROME_PREF = {
-    "title": "Use Chrome for web research",
-    "summary": "Prefer Chrome browser automation over WebSearch for web research.",
-    "type": "conv-pref",
+    "claim": "Chrome MCP drives the running app",
+    "detail": "Chrome browser automation reaches a locally running web app.",
+    "type": "fact", "about_user": False, "window_start": "2026-07-01",
 }
 
 
@@ -51,9 +53,40 @@ def test_about_user_required_for_fact(connection):
         store.remember(connection, [node])
 
 
-def test_about_user_forbidden_for_pref(connection):
+def test_about_user_forbidden_for_idea(connection):
+    """`idea` is the one surviving type that never declares a sphere -- an idea
+    is a proposition, not something inside or outside Eric's life."""
     with pytest.raises(InvariantError, match="must be null"):
-        store.remember(connection, [{**CHROME_PREF, "about_user": True}])
+        store.remember(connection, [
+            {"claim": "Try slot attention on symbolic music",
+             "type": "idea", "about_user": True},
+        ])
+
+
+@pytest.mark.parametrize(
+    ("node_type", "destination"),
+    [("conv-pref", "settings/conv.md"), ("code-pref", "settings/code.md"),
+     ("meta", "settings/meta.md")],
+)
+def test_retired_types_name_the_file_they_moved_to(connection, node_type, destination):
+    """A bare 'unknown type' would send the agent hunting for a typo. These types
+    did not vanish -- they became files -- and the error has to say so or the
+    rule gets written nowhere."""
+    with pytest.raises(InvariantError, match=destination):
+        store.remember(connection, [
+            {"claim": "Never use tabs in Python", "type": node_type},
+        ])
+
+
+def test_claim_word_cap_is_enforced(connection):
+    """The cap is the whole redesign: without it, detail migrates back into the
+    rendered field and T1 grows without bound again."""
+    with pytest.raises(InvariantError, match="max 8"):
+        store.remember(connection, [
+            {"claim": "Eric will apply for a Discovery credit card shortly "
+                      "after arriving in Ann Arbor",
+             "type": "todo", "about_user": True},
+        ])
 
 
 def test_window_order_enforced(connection):
@@ -67,8 +100,8 @@ def test_window_order_enforced(connection):
 def test_idea_cannot_be_superseded(connection):
     written = store.remember(
         connection,
-        [{"title": "Slot attention on symbolic music",
-          "summary": "Try slot attention on symbolic music.", "type": "idea"}],
+        [{"claim": "Slot attention on symbolic music",
+          "detail": "Try slot attention on symbolic music.", "type": "idea"}],
     )["written"][0]
 
     with pytest.raises(InvariantError, match="stays valid"):
@@ -77,8 +110,8 @@ def test_idea_cannot_be_superseded(connection):
             [{
                 "op": "supersede",
                 "supersedes": written,
-                "title": "Ran the slot attention experiment",
-                "summary": "Ran the slot attention experiment.",
+                "claim": "Ran the slot attention experiment",
+                "detail": "Ran the slot attention experiment.",
                 "type": "action",
                 "about_user": True,
             }],
@@ -88,7 +121,7 @@ def test_idea_cannot_be_superseded(connection):
 def test_todo_superseded_by_action(connection):
     todo_id = store.remember(
         connection,
-        [{"title": "Get a US SSN", "summary": "Get a US SSN.",
+        [{"claim": "Get a US SSN", "detail": "Get a US SSN.",
           "type": "todo", "about_user": True}],
     )["written"][0]
 
@@ -97,8 +130,8 @@ def test_todo_superseded_by_action(connection):
         [{
             "op": "supersede",
             "supersedes": todo_id,
-            "title": "Eric obtained a US SSN",
-            "summary": "Eric obtained a US SSN.",
+            "claim": "Eric obtained a US SSN",
+            "detail": "Eric obtained a US SSN.",
             "type": "action",
             "about_user": True,
             "window_start": "2026-09-01",
@@ -117,15 +150,15 @@ def test_todo_superseded_by_action(connection):
 
 def test_double_supersede_rejected(connection):
     todo_id = store.remember(
-        connection, [{"title": "Open a bank account",
-                      "summary": "Open a bank account.", "type": "todo",
+        connection, [{"claim": "Open a bank account",
+                      "detail": "Open a bank account.", "type": "todo",
                       "about_user": True}]
     )["written"][0]
     supersede = {
         "op": "supersede",
         "supersedes": todo_id,
-        "title": "Eric opened a bank account",
-        "summary": "Eric opened a bank account.",
+        "claim": "Eric opened a bank account",
+        "detail": "Eric opened a bank account.",
         "type": "action",
         "about_user": True,
     }
@@ -137,7 +170,7 @@ def test_double_supersede_rejected(connection):
 def test_batch_is_atomic(connection):
     with pytest.raises(InvariantError):
         store.remember(connection, [CHROME_PREF,
-                                    {"title": "bad", "summary": "bad", "type": "nonsense"}])
+                                    {"claim": "bad", "detail": "bad", "type": "nonsense"}])
     assert connection.execute("SELECT COUNT(*) FROM nodes").fetchone()[0] == 0
 
 
@@ -156,15 +189,15 @@ def test_t1_excludes_world_facts(connection):
         [
             UMICH,
             {
-                "title": "Fizz rebranded to Mine",
-                "summary": "The credit builder Fizz now operates as Mine.",
+                "claim": "Fizz rebranded to Mine",
+                "detail": "The credit builder Fizz now operates as Mine.",
                 "type": "fact",
                 "about_user": False,
                 "window_start": "2026-07-20",
             },
         ],
     )
-    summaries = [node["summary"] for node in retrieval.assemble_t1(connection)]
+    summaries = [node["detail"] for node in retrieval.assemble_t1(connection)]
     assert any("MSCSE" in summary for summary in summaries)
     assert not any("Fizz" in summary for summary in summaries)
 
@@ -173,8 +206,8 @@ def test_t1_respects_lead_time(connection):
     store.remember(
         connection,
         [{
-            "title": "Future postdoc",
-            "summary": "Eric will start a postdoc.",
+            "claim": "Future postdoc",
+            "detail": "Eric will start a postdoc.",
             "type": "fact",
             "about_user": True,
             "window_start": "2030-01-01",
@@ -187,8 +220,8 @@ def test_scope_isolation(connection):
     store.remember(
         connection,
         [{
-            "title": "Dev server launch command",
-            "summary": "The dev server is started with run.bat.",
+            "claim": "Dev server launch command",
+            "detail": "The dev server is started with run.bat.",
             "type": "fact",
             "about_user": True,
             "scope": "project:polygenie",
@@ -229,8 +262,9 @@ def test_source_session_not_defaulted_for_derived_nodes(connection, monkeypatch)
     would misattribute wiki content to a conversation that never produced it."""
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "live-session-abc")
     written = store.remember(connection, [{
-        "title": "Ingested wiki section", "summary": "Some wiki content.",
-        "type": "raw", "origin": "derived", "derived_from": "wiki/page.md",
+        "claim": "Ingested wiki section", "detail": "Some wiki content.",
+        "type": "fact", "about_user": False, "origin": "derived",
+        "derived_from": "wiki/page.md",
     }])["written"][0]
     row = connection.execute(
         "SELECT source_session FROM nodes WHERE id = ?", (written,)
@@ -351,8 +385,9 @@ def test_locator_not_defaulted_for_derived_nodes(connection, monkeypatch, transc
     ])
 
     written = store.remember(connection, [{
-        "title": "Ingested wiki section", "summary": "Some wiki content.",
-        "type": "raw", "origin": "derived", "derived_from": "wiki/page.md",
+        "claim": "Ingested wiki section", "detail": "Some wiki content.",
+        "type": "fact", "about_user": False, "origin": "derived",
+        "derived_from": "wiki/page.md",
     }])["written"][0]
     row = connection.execute(
         "SELECT locator FROM nodes WHERE id = ?", (written,)
@@ -378,8 +413,8 @@ def test_edges_require_existing_target(connection):
         store.remember(
             connection,
             [{
-                "title": "Apply slot attention to music",
-                "summary": "Eric plans to apply slot attention to music.",
+                "claim": "Apply slot attention to music",
+                "detail": "Eric plans to apply slot attention to music.",
                 "type": "intention",
                 "about_user": True,
                 "edges": [{"rel": "motivates", "dst": "does-not-exist"}],

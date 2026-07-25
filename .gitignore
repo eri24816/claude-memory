@@ -1,3 +1,8 @@
+# Everything the user owns — the store and the pref files — lives here. Ignored
+# whole: nothing ships as a default, so a pull can never conflict with a rule
+# someone wrote. Set CLAUDE_MEMORY_SETTINGS to keep it outside the checkout.
+settings/
+
 # The SQLite store is precious but not diffable — back it up with VACUUM INTO,
 # never commit it. See README "Storage and durability".
 *.db

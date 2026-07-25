@@ -69,20 +69,37 @@ python -m pip install pysqlite3-binary
 python -m claude_memory init
 ```
 
-This creates the SQLite store and applies the schema. By default it lives at:
+This creates the SQLite store and applies the schema. By default it lives in the
+repo, beside the preference files:
 
 ```
-~/.claude/memory/memory.db
+<repo>/settings/memory.db
 ```
 
-To put it elsewhere, set `CLAUDE_MEMORY_DB` to an absolute path **before** running
-any command — the hooks read the same variable, so set it once in your shell
-profile if you override it:
+`settings/` holds everything you own — the store plus `conv.md`, `code.md` and
+`meta.md` — and is gitignored whole, so nothing ships as a default and a `git
+pull` can never conflict with a rule you wrote. It is deliberately **not** under
+`~/.claude/`, which belongs to the Claude Code harness rather than to this
+project.
+
+To put it elsewhere, set these **before** running any command — the hooks read
+the same variables, so set them in your shell profile if you override them:
 
 ```bash
-export CLAUDE_MEMORY_DB="/path/to/memory.db"   # bash/zsh
-$env:CLAUDE_MEMORY_DB = "C:\path\to\memory.db" # PowerShell
+export CLAUDE_MEMORY_SETTINGS="/path/to/settings"   # store + pref files
+export CLAUDE_MEMORY_DB="/path/to/memory.db"        # just the store
 ```
+
+```powershell
+$env:CLAUDE_MEMORY_SETTINGS = "C:\path\to\settings"
+```
+
+**Upgrading an existing store?** If you already have one at
+`~/.claude/memory/memory.db` from before 0.1.0, do not run `init` — type
+`migrate to v0.1.0` in Claude Code, or see
+[MIGRATION-0.1.0.md](MIGRATION-0.1.0.md). Migration copies the old store to the
+new location rather than moving it, so the original stays valid until you delete
+it yourself.
 
 ---
 
@@ -200,7 +217,7 @@ is dropped, just a little slower.
 
 ```bash
 # Write a test node…
-python -m claude_memory remember --json '[{"title":"install smoke test","summary":"claude-memory installed and working","type":"fact","about_user":true}]'
+python -m claude_memory remember --json '[{"claim":"claude-memory install smoke test","type":"fact","about_user":true}]'
 
 # …search for it…
 python -m claude_memory search "install test"
@@ -221,14 +238,21 @@ something, end the turn, and confirm it lands via `search`.
 ## Everyday commands
 
 ```bash
-python -m claude_memory search "<query>"        # hybrid retrieval
-python -m claude_memory search "<q>" --type code-pref
-python -m claude_memory dig "<exact title>"     # one node in full
+python -m claude_memory search "<query>" "<another angle>"   # batched, cheaper
+python -m claude_memory dig <id-or-claim> <another>          # nodes in full
 python -m claude_memory t1 --render             # the autoload set
-python -m claude_memory ingest <file-or-folder> # heading-split a doc into nodes
+python -m claude_memory where                   # resolved store + settings paths
 python -m claude_memory snapshot backup.db      # consistent backup (VACUUM INTO)
-python -m claude_memory stale "<title>"         # mark a node no longer true
+python -m claude_memory stale "<handle>"        # mark a node no longer true
+python -m claude_memory migrate --status        # schema version
 ```
+
+`search` and `dig` take several arguments per call and should be used that way: a
+tool call is billed for its cached prefix once, so three queries in one call cost
+a fraction of three separate calls.
+
+Coding conventions are **not** autoloaded — they live in `settings/code.md` and
+are reached through the `code-prefs` skill.
 
 The store is precious and not diffable — **back it up with `snapshot`, never
 commit the `.db`** (it's gitignored for that reason).
