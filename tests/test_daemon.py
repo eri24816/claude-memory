@@ -26,9 +26,21 @@ def scratch_db(tmp_path, monkeypatch):
     path = tmp_path / "memory.db"
     monkeypatch.setattr(db, "DEFAULT_DB_PATH", path)
     monkeypatch.setenv("CLAUDE_MEMORY_DB", str(path))
+    # This module is the one place that spawns real daemons, so it opts back in
+    # to what conftest disables for everything else.
+    monkeypatch.delenv("CLAUDE_MEMORY_NO_DAEMON", raising=False)
+
     connection = db.connect(path)
     connection.close()
     yield path
+
+    # Wait for registration before stopping. ensure_running() is fire-and-forget,
+    # so teardown usually arrives before the daemon has written its discovery
+    # file -- stop() then finds nothing to stop, and the daemon, which has no
+    # idle timeout, survives the test run forever. That is how ~100 orphaned
+    # daemons accumulated holding 3.8 GB. Bounded, because most of these tests
+    # never spawn one and must not pay a full timeout each.
+    _wait_for(lambda: daemon.discover_running() is not None, timeout=3.0)
     daemon.stop()
 
 

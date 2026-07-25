@@ -67,12 +67,20 @@ def relocate(target: Path | None = None) -> dict[str, Any]:
         return {"relocated": False, "reason": "no legacy store"}
 
     if target.exists() and target.stat().st_size > 0:
-        with sqlite3.connect(str(target)) as probe:
+        # try/finally, not `with`: sqlite3's context manager commits the
+        # transaction and leaves the connection OPEN. That open handle then
+        # blocks the copy below with "database is locked" -- invisible in a
+        # one-shot CLI process that exits immediately afterwards, fatal when
+        # anything calls this in-process.
+        probe = sqlite3.connect(str(target))
+        try:
             populated = probe.execute(
                 "SELECT 1 FROM sqlite_master WHERE type='table' AND name='nodes'"
             ).fetchone() is not None
             if populated and probe.execute("SELECT COUNT(*) FROM nodes").fetchone()[0]:
                 return {"relocated": False, "reason": "target already has nodes"}
+        finally:
+            probe.close()
 
     target.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(legacy, target)

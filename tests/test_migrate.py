@@ -320,3 +320,38 @@ def test_a_dead_daemon_does_not_block_migration(v0_store, monkeypatch):
 
     connection = _connect(v0_store)
     assert migrate.run(connection, v0_store)["pending"] == 2
+
+
+def test_an_empty_stamped_target_does_not_swallow_the_migration(v0_store, tmp_path,
+                                                                monkeypatch):
+    """Regression, found on a real machine one command before it would have run.
+
+    A store created by an earlier build sat empty and stamped current at the
+    configured path, while the real data waited at the legacy path. The CLI
+    opened a connection to that empty file, `run` then relocated the legacy store
+    over it, and the already-open connection went on serving the header it had
+    cached -- so `run` saw v1, reported "already at v1" and did nothing at all.
+
+    Reporting success while doing nothing is the worst available outcome: the
+    caller moves on, and the data stays unmigrated behind a green light.
+    """
+    from claude_memory import cli
+
+    target = tmp_path / "settings" / "memory.db"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(db, "LEGACY_DB_PATH", v0_store)
+    monkeypatch.setattr(db, "DEFAULT_DB_PATH", target)
+
+    probe = db.connect(target)  # empty, and stamped current
+    assert db.user_version(probe) == db.SCHEMA_VERSION
+    probe.close()  # every connection must be closed: relocate replaces the file
+
+    assert cli.main(["migrate"]) == 0
+
+    migrated = db.connect(target)
+    try:
+        columns = {row[1] for row in migrated.execute("PRAGMA table_info(nodes)")}
+        assert "claim" in columns
+        assert migrated.execute("SELECT COUNT(*) FROM nodes").fetchone()[0] == 2
+    finally:
+        migrated.close()

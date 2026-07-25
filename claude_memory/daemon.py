@@ -82,6 +82,16 @@ def ensure_running() -> None:
     if discover_running() is not None:
         return
 
+    if os.environ.get("CLAUDE_MEMORY_NO_DAEMON"):
+        # An opt-out for anything that runs the hooks many times over throwaway
+        # stores -- the test suite above all. The daemon is deliberately
+        # immortal (no idle timeout) and discovers itself through a file beside
+        # the store, so a caller that uses a fresh store per invocation never
+        # finds the previous one and spawns another every time. That leaked ~100
+        # orphaned daemons holding 3.8 GB before anyone noticed, and it degrades
+        # the developer's machine rather than anything the suite can see fail.
+        return
+
     command = [sys.executable, "-m", "claude_memory.daemon", "serve"]
     kwargs: dict[str, Any] = dict(
         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,

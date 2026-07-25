@@ -30,5 +30,11 @@ def isolated_settings(tmp_path, monkeypatch):
     # spawn, setattr reaches this process, where the constant was resolved at
     # import time and no longer consults the environment.
     monkeypatch.setenv("CLAUDE_MEMORY_LEGACY_DB", str(tmp_path / "legacy.db"))
+
+    # No real daemons. Each test gets a fresh store, so daemon discovery never
+    # finds the previous one and ensure_running() spawns another -- and the
+    # daemon has no idle timeout, so every one of them survives the run.
+    # test_daemon.py opts back in explicitly, because spawning is what it tests.
+    monkeypatch.setenv("CLAUDE_MEMORY_NO_DAEMON", "1")
     monkeypatch.setattr(db, "LEGACY_DB_PATH", tmp_path / "legacy" / "memory.db")
     return tmp_path / "settings"

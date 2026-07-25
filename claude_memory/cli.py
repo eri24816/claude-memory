@@ -72,6 +72,44 @@ def _deny_writes(action, *_args):
     return sqlite3.SQLITE_OK if action in READ_ONLY_ACTIONS else sqlite3.SQLITE_DENY
 
 
+def _migrate(args) -> int:
+    """The migrate subcommand, which owns its own connection lifetime.
+
+    Every branch but `run` needs a connection; `run` must open its own, after it
+    has finished moving files around.
+    """
+    from . import migrate as migrate_module
+    from .models import InvariantError as _InvariantError
+
+    try:
+        if args.rollback:
+            _emit(migrate_module.rollback(args.db))
+            return 0
+        if not (args.status or args.set_file or args.next_n):
+            _emit(migrate_module.run(None, args.db))
+            return 0
+
+        connection = db.connect(args.db)
+        try:
+            if args.status:
+                _emit(migrate_module.status(connection))
+            elif args.set_file:
+                _emit(migrate_module.set_claims(
+                    connection, _read_specs(None, args.set_file)
+                ))
+            else:
+                _emit(migrate_module.next_batch(connection, args.next_n))
+        finally:
+            connection.close()
+    except _InvariantError as error:
+        _emit({"error": "invariant", "detail": str(error)})
+        return 2
+    except sqlite3.DatabaseError as error:
+        _emit({"error": "database", "detail": str(error)})
+        return 3
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     _use_utf8_stdout()
     parser = argparse.ArgumentParser(prog="claude_memory")
@@ -158,6 +196,18 @@ def main(argv: list[str] | None = None) -> int:
     daemon_parser.add_argument("action", choices=["start", "stop", "status"])
 
     args = parser.parse_args(argv)
+
+    if args.command == "migrate":
+        # Dispatched BEFORE connecting, and that ordering is load-bearing.
+        # `run` may replace the file at the target path -- relocating a
+        # pre-0.1.0 store from ~/.claude -- and a connection opened beforehand
+        # goes on serving the header it cached at open time. The observed
+        # failure: an empty stamped store at the target made `run` report
+        # "already at v1" and do nothing, while the freshly copied v0 data sat
+        # underneath it. Reporting success while doing nothing is far worse than
+        # failing, because the caller moves on.
+        return _migrate(args)
+
     connection = db.connect(args.db)
 
     try:
@@ -231,22 +281,6 @@ def main(argv: list[str] | None = None) -> int:
 
         elif args.command == "rollback":
             _emit(store.rollback_run(connection, args.capture_run_id))
-
-        elif args.command == "migrate":
-            from . import migrate as migrate_module
-
-            if args.rollback:
-                _emit(migrate_module.rollback(args.db))
-            elif args.status:
-                _emit(migrate_module.status(connection))
-            elif args.set_file:
-                _emit(migrate_module.set_claims(
-                    connection, _read_specs(None, args.set_file)
-                ))
-            elif args.next_n:
-                _emit(migrate_module.next_batch(connection, args.next_n))
-            else:
-                _emit(migrate_module.run(connection, args.db))
 
         elif args.command == "where":
             from . import settings as settings_module
