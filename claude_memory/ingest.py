@@ -10,12 +10,10 @@ be true, about anything in particular, or worth keeping. The claim is the
 heading path and the body is the detail, so a raw hit renders as one locator
 line and costs a dig to open.
 
-v0 expected these to be refined into typed claims as retrieval surfaced them,
-and after four days not one had been -- so nothing about this design may depend
-on refinement happening. It is now merely allowed: an agent that reads a chunk
-and supersedes it with what it contains improves the store, and an agent that
-never does leaves a store that still works, because what bounds raw is the
-per-query cap in retrieval and not the hope of a later pass.
+v0 expected these to be refined into typed claims as retrieval surfaced them.
+After four days, not one had been, so 0.2.0 bounds raw with the per-query cap in
+retrieval and nothing here tries to help a refinement pass along: a chunk is
+regenerable, and re-ingest simply replaces it.
 
 Nodes produced here are `origin='derived'` — regenerable, and the only nodes
 re-ingest is allowed to replace.
@@ -149,24 +147,12 @@ def _markdown_files(target: Path) -> Iterator[Path]:
         yield path
 
 
-def _clear_derived(
-    connection: sqlite3.Connection, source: str
-) -> tuple[int, dict[str, str]]:
-    """Drop a file's derived nodes, returning the refinements they carried.
-
-    Section ids are slugs of page + heading path, so an edited file re-emits the
-    same id for any section whose heading survived. Returning the supersession
-    pointers lets the caller re-apply them, or a re-ingest would resurrect chunks
-    an agent had already refined and quietly undo that work.
-    """
+def _clear_derived(connection: sqlite3.Connection, source: str) -> int:
+    """Drop a file's derived nodes. Chunks are regenerable; nothing is preserved."""
     rows = connection.execute(
-        "SELECT id, rowid, superseded_by FROM nodes "
-        "WHERE derived_from = ? AND origin = 'derived'",
+        "SELECT id, rowid FROM nodes WHERE derived_from = ? AND origin = 'derived'",
         (source,),
     ).fetchall()
-    refinements = {
-        row["id"]: row["superseded_by"] for row in rows if row["superseded_by"]
-    }
     for row in rows:
         connection.execute("DELETE FROM nodes_fts WHERE rowid = ?", (row["rowid"],))
         connection.execute("DELETE FROM nodes_vec WHERE rowid = ?", (row["rowid"],))
@@ -175,7 +161,7 @@ def _clear_derived(
             (row["id"], row["id"]),
         )
         connection.execute("DELETE FROM nodes WHERE id = ?", (row["id"],))
-    return len(rows), refinements
+    return len(rows)
 
 
 def ingest_path(
@@ -197,11 +183,6 @@ def ingest_path(
         "files_skipped": 0,
         "nodes_written": 0,
         "nodes_replaced": 0,
-        # A refinement is lost when the heading it hung off was renamed or
-        # deleted, so the section no longer re-emits its id. The refined node
-        # survives regardless; only the link back to its source is broken.
-        "refinements_kept": 0,
-        "refinements_lost": 0,
         "capture_run_id": capture_run_id,
     }
 
@@ -231,8 +212,7 @@ def ingest_path(
             stats["nodes_written"] += len(sections)
             continue
 
-        replaced, refinements = _clear_derived(connection, source)
-        stats["nodes_replaced"] += replaced
+        stats["nodes_replaced"] += _clear_derived(connection, source)
 
         page = path.stem
         specs = []
@@ -252,14 +232,6 @@ def ingest_path(
             })
 
         store.remember(connection, specs, capture_run_id)
-
-        for raw_id, refined_id in refinements.items():
-            restored = connection.execute(
-                "UPDATE nodes SET superseded_by = ? WHERE id = ? AND type = 'raw'",
-                (refined_id, raw_id),
-            ).rowcount
-            stats["refinements_kept"] += restored
-            stats["refinements_lost"] += 1 - restored
         connection.commit()
 
         stats["files_ingested"] += 1

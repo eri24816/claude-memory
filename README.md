@@ -114,10 +114,12 @@ needs and what per-source cannot do. An explicit `--type raw` opts out of the pe
 cap: it exists to stop a mixed result set being swamped, and a search that asked for
 chunks and nothing else is not being swamped.
 
-Nothing depends on refinement any more. An agent that digs a chunk and supersedes it with
-the claims it contains improves the store; an agent that never does leaves a store that
-works. Re-ingest stays lossless — a section re-emits the same id, and a refinement that
-was pointing at it is re-applied — so dropping the chunks costs nothing but a rebuild.
+Refinement is gone entirely, not merely optional. `ingest` no longer preserves anything
+across a re-ingest: an edited file has its chunks deleted and rewritten, because a chunk
+is regenerable from the document it came from and the machinery that protected
+supersession pointers was guarding an event that occurred zero times in four days of use.
+A chunk worth reading is worth writing a typed claim about, and that claim is an ordinary
+node that stands on its own.
 
 A `fact` asserts truth *from* `window_start`, **not** present truth. So a fact node is
 never falsified by the passage of time — only superseded. "Fizz rebranded to Mine in
@@ -436,7 +438,8 @@ Steps 1–2 are the write side; tiering without them is just hand-saving.
 design conversation reverses positions as it goes; if the extractor only sees
 pre-existing nodes, turn 20 cannot supersede turn 12 and the store accumulates
 contradictions. This is what carries the load now that there is no curated/fleeting
-distinction. See [capture-prompt.md](capture-prompt.md).
+distinction. The rule lives in the `memory` skill, alongside the rest of the write
+schema.
 
 ## Implementation
 

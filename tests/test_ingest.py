@@ -211,29 +211,21 @@ def test_reingest_is_a_no_op_when_the_file_is_unchanged(connection, wiki):
     assert again["nodes_written"] == 0
 
 
-def test_reingest_preserves_a_refinement(connection, wiki):
-    """An edited page must not resurrect a chunk an agent already refined."""
+def test_reingest_replaces_an_edited_page(connection, wiki):
+    """An edited file is re-chunked wholesale; chunks are regenerable."""
     ingest.ingest_path(connection, wiki)
-    raw_id = connection.execute(
-        "SELECT id FROM nodes WHERE claim LIKE '%Session resumption%'"
-    ).fetchone()["id"]
+    before = connection.execute(
+        "SELECT COUNT(*) n FROM nodes WHERE type = 'raw'"
+    ).fetchone()["n"]
 
-    store.remember(connection, [{
-        "claim": "Session resumption skips the full handshake",
-        "type": "fact", "about_user": False, "window_start": "2026-07-25",
-    }])
-    refined_id = "session-resumption-skips-the-full-handshake"
-    connection.execute(
-        "UPDATE nodes SET superseded_by = ? WHERE id = ?", (refined_id, raw_id)
+    (wiki / "tls.md").write_text(
+        PAGE + "\n## Postscript\n\n" + "Added later, " * 5 + "\n", encoding="utf-8"
     )
-    connection.commit()
-
-    (wiki / "tls.md").write_text(PAGE + "\n## Postscript\n\n" + "Added later, "
-                                * 5 + "\n", encoding="utf-8")
     stats = ingest.ingest_path(connection, wiki)
 
-    assert stats["refinements_kept"] == 1
-    survivor = connection.execute(
-        "SELECT superseded_by FROM nodes WHERE id = ?", (raw_id,)
-    ).fetchone()
-    assert survivor["superseded_by"] == refined_id
+    assert stats["files_ingested"] == 1
+    assert stats["nodes_replaced"] > 0
+    after = connection.execute(
+        "SELECT COUNT(*) n FROM nodes WHERE type = 'raw'"
+    ).fetchone()["n"]
+    assert after == before + 1, "the new section should be the only addition"

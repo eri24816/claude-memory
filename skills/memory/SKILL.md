@@ -160,8 +160,9 @@ dangling edge.
 `raw` is the one type you do not write by hand — `ingest` produces it. A raw row is a
 document section: its claim is the heading path, so it always carries `+` and always
 needs a dig. At most two reach any mixed search, so a wiki cannot crowd out the store.
-If you dig one and it contains something worth keeping, supersede it with a typed claim;
-if you do not, nothing breaks.
+If you dig one and it says something worth keeping, write that as an ordinary typed node
+— do not supersede the chunk. Re-ingesting the file deletes and rewrites its chunks, so
+anything hung off one is lost; the typed claim stands on its own and survives.
 
 ## The background daemon
 

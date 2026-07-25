@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.2.1 — 2026-07-26
+
+- The refinement mechanism is removed. `ingest` no longer carries supersession
+  pointers across a re-ingest; an edited file has its chunks deleted and
+  rewritten, and `refinements_kept` / `refinements_lost` are gone from its
+  output. It guarded an event that happened zero times in four days of use.
+- `capture-prompt.md` is deleted. It described a Stop-hook extraction stage that
+  no code ever called, on the pre-0.1.0 `title`/`summary` schema. Every rule in
+  it that was still true now lives in `meta.md` or the `memory` skill.
+- The `memory` skill gains the window semantics per type — notably that a
+  `todo`'s `window_end` is a due date, not when it stops being true — plus the
+  granularity, restraint and supersession rules that had no other home.
+
 ## 0.2.0 — 2026-07-25
 
 - `raw` and `ingest` return. A section's heading path is its claim and its body
