@@ -6,10 +6,16 @@ that structure with a model would discard real signal and risk inventing claims
 the page never made.
 
 Sections land as `type='raw'`: indexed so they can surface, but not claimed to
-be true, about anything in particular, or worth keeping. When retrieval pulls a
-raw chunk up and an agent actually reads it, the chunk gets superseded by the
-typed claims it turned out to contain. Refinement is paid for by attention, and
-only where attention was already spent.
+be true, about anything in particular, or worth keeping. The claim is the
+heading path and the body is the detail, so a raw hit renders as one locator
+line and costs a dig to open.
+
+v0 expected these to be refined into typed claims as retrieval surfaced them,
+and after four days not one had been -- so nothing about this design may depend
+on refinement happening. It is now merely allowed: an agent that reads a chunk
+and supersedes it with what it contains improves the store, and an agent that
+never does leaves a store that still works, because what bounds raw is the
+per-query cap in retrieval and not the hope of a later pass.
 
 Nodes produced here are `origin='derived'` — regenerable, and the only nodes
 re-ingest is allowed to replace.
@@ -24,7 +30,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterator
 
-from . import store
+from . import models, store
 from .models import slugify
 
 MAX_SECTION_CHARS = 1500          # keeps each chunk inside the embedder's window
@@ -109,6 +115,23 @@ def split_markdown(text: str, max_chars: int = MAX_SECTION_CHARS) -> list[Sectio
 
     flush()
     return sections
+
+
+def _raw_claim(page: str, heading_path: str) -> str:
+    """`page > heading path`, shortened from the left if it will not fit.
+
+    The tail is what distinguishes one section from its siblings, so an
+    over-long path drops intermediate headings rather than trailing ones. The
+    page name is always kept: without it a row reads as a claim about the world
+    instead of a pointer into a document.
+    """
+    parts = [page, *heading_path.split(" > ")]
+    while len(parts) > 2 and len(" > ".join(parts)) > models.RAW_CLAIM_MAX_CHARS:
+        del parts[1]
+    claim = " > ".join(parts)
+    if len(claim) > models.RAW_CLAIM_MAX_CHARS:
+        claim = claim[: models.RAW_CLAIM_MAX_CHARS - 1].rstrip() + "…"
+    return claim
 
 
 def _file_hash(text: str) -> str:
@@ -217,8 +240,8 @@ def ingest_path(
             wikilinks = WIKILINK_PATTERN.findall(section.body)
             specs.append({
                 "id": slugify(f"{page}-{section.heading_path}", max_length=90),
-                "title": f"{page} > {section.title}",
-                "summary": section.body,
+                "claim": _raw_claim(page, section.title),
+                "detail": section.body,
                 "type": "raw",
                 "scope": scope,
                 "origin": "derived",

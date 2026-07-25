@@ -49,9 +49,16 @@ on whether the eight words were the whole node.
 | `todo` | Something necessary or decided — a todo list or calendar item | `window_end` = due date, if any |
 | `intention` | Someone wants to and may do something — not yet committed | when expressed |
 | `idea` | A thought or proposal, large or small | when thought |
+| `raw` | An ingested document section — a chunk, not a claim | none |
 
 Rules are **not** node types. `meta`, `conv-pref` and `code-pref` are files in
-`settings/` — see below. `raw` was removed in 0.1.0 and returns in 0.2.0.
+`settings/` — see below.
+
+`raw` is the one type nothing asserts. Its claim is the heading path its author wrote and
+its body is the detail, so it is always followed by `+` and always costs a dig to open —
+honest about being a pointer rather than a statement. It declares no `about_user`, which
+is what keeps it out of the autoload set: nothing has read the chunk closely enough to
+answer that question, and guessing would be a claim the ingest never made.
 
 ## Rules are files, not nodes
 
@@ -89,11 +96,28 @@ hook was invented to encode. The demotion was collateral damage: with nothing ev
 refined, there was no counterpart for a raw hit to lose to, so 0.6 only made raw weaker
 at the one job it did well.
 
-0.1.0 removes `raw` entirely. 0.2.0 reintroduces it with a **per-query cap** — bounding
-how many raw hits a single search may return, which controls the flood regardless of
-corpus size and, unlike the demotion, does not depend on a refinement pass that never
-happens. Re-ingest is lossless now that nothing refines a chunk into something worth
-preserving, so dropping them costs nothing but a rebuild.
+0.1.0 removed `raw` entirely. 0.2.0 brings it back under a **per-query cap**: at most
+`RAW_PER_QUERY` (2) raw hits in any mixed search, filtered in SQL before `LIMIT` so a
+capped-away chunk cannot consume a result slot.
+
+The cap succeeds where the demotion failed because it asks an answerable question. "Is
+this chunk worth less than a claim?" needs a refined counterpart to compare against, and
+there was never one; "how much of a single query may be chunks?" is answerable with
+nothing in the store but chunks. It is also indifferent to corpus size — 500 sections or
+50,000, the third one is out — and it does not weaken the hits it keeps: the best two
+arrive at full score, in the rank they earned.
+
+Two limits now bound raw, and they are not the same limit. `MAX_PER_SOURCE` holds any one
+*document* to two hits, because sections of a page are near-identical in embedding space.
+`RAW_PER_QUERY` holds the whole *corpus* to two, which is what a wiki of a thousand pages
+needs and what per-source cannot do. An explicit `--type raw` opts out of the per-query
+cap: it exists to stop a mixed result set being swamped, and a search that asked for
+chunks and nothing else is not being swamped.
+
+Nothing depends on refinement any more. An agent that digs a chunk and supersedes it with
+the claims it contains improves the store; an agent that never does leaves a store that
+works. Re-ingest stays lossless — a section re-emits the same id, and a refinement that
+was pointing at it is re-applied — so dropping the chunks costs nothing but a rebuild.
 
 A `fact` asserts truth *from* `window_start`, **not** present truth. So a fact node is
 never falsified by the passage of time — only superseded. "Fizz rebranded to Mine in

@@ -15,8 +15,16 @@ FINAL_K = 10
 # v0 demoted raw hits by 0.6 so a refined node covering the same ground would
 # win. Refinement never once happened — 518 raw nodes, zero refined — so there
 # was no counterpart to lose to and the penalty only made raw hits weaker at the
-# one thing they were good for. 0.2.0 reintroduces raw with a per-query cap,
-# which bounds the flood regardless of corpus size instead of guessing at rank.
+# one thing they were good for.
+#
+# 0.2.0 caps instead. A cap bounds the flood regardless of corpus size, and it
+# does not care about rank: the best two raw hits still arrive at full strength
+# and in their earned position, while the third onwards cannot crowd out typed
+# nodes no matter how many chunks the corpus holds. The demotion tried to answer
+# "is this chunk worth less than a claim?", which needs a refined counterpart to
+# be answerable at all. The cap answers "how much of one query may be chunks?",
+# which is answerable with nothing in the store but chunks.
+RAW_PER_QUERY = 2
 
 # Sections of one document are near-identical in embedding space, so a matching
 # page sweeps the top slots and buries every other source. Capping per source
@@ -72,6 +80,7 @@ def search(
     exclude_ids: set[str] | None = None,
     node_type: str | None = None,
     max_per_source: int = MAX_PER_SOURCE,
+    raw_limit: int = RAW_PER_QUERY,
 ) -> list[dict[str, Any]]:
     """Hybrid retrieval fused by Reciprocal Rank Fusion.
 
@@ -141,7 +150,12 @@ def search(
                        PARTITION BY COALESCE(n.derived_from, n.id)
                        ORDER BY COALESCE(1.0 / (? + lexical.rank), 0)
                               + COALESCE(1.0 / (? + semantic.rank), 0) DESC
-                   ) AS source_position
+                   ) AS source_position,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY n.type = 'raw'
+                       ORDER BY COALESCE(1.0 / (? + lexical.rank), 0)
+                              + COALESCE(1.0 / (? + semantic.rank), 0) DESC
+                   ) AS raw_position
             FROM nodes n
             LEFT JOIN lexical  ON lexical.node_rowid  = n.rowid
             LEFT JOIN semantic ON semantic.node_rowid = n.rowid
@@ -158,16 +172,27 @@ def search(
                lexical_rank, semantic_rank, score
         FROM ranked
         WHERE source_position <= ?
+          AND (type != 'raw' OR raw_position <= ?)
         ORDER BY score DESC
         LIMIT ?
     """
 
+    # Filtered before LIMIT, not after. Trimming raw hits from a finished result
+    # set would let capped-away chunks consume slots and hand back four rows for
+    # a limit of ten -- the cap has to shrink what raw may occupy, not what the
+    # caller receives.
+    #
+    # An explicit `--type raw` opts out: the cap protects a mixed result set from
+    # being swamped, and someone who asked for chunks and nothing else is not
+    # being swamped, they are being answered.
+    effective_raw_limit = limit if node_type == "raw" else raw_limit
+
     rows = connection.execute(
         sql,
         (match_expression, CANDIDATE_K, query_vector, CANDIDATE_K,
-         RRF_K, RRF_K, RRF_K, RRF_K,
+         RRF_K, RRF_K, RRF_K, RRF_K, RRF_K, RRF_K,
          *scopes, *parent_params, *exclude_params, *type_params,
-         max_per_source, limit),
+         max_per_source, effective_raw_limit, limit),
     ).fetchall()
     return [dict(row) for row in rows]
 

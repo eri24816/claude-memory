@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.2.0 — 2026-07-25
+
+- `raw` and `ingest` return. A section's heading path is its claim and its body
+  is its detail, so a chunk renders as one locator line carrying `+` and costs a
+  dig to open.
+- Raw hits are capped at two per mixed query (`RAW_PER_QUERY`), filtered in SQL
+  before `LIMIT` so a capped-away chunk cannot consume a result slot. This
+  replaces v0's 0.6 score demotion, which needed a refined counterpart to lose
+  to and never had one. `--type raw` opts out.
+- Nothing depends on refinement happening any more — it improves the store when
+  it happens and costs nothing when it does not.
+- `raw` is exempt from the eight-word claim cap and bounded at 80 characters
+  instead: its claim is a heading path, not a compressed assertion. It requires
+  a detail, and still declares no `about_user`, which keeps it out of autoload.
+
 ## 0.1.0 — 2026-07-25
 
 - Every node is an eight-word `claim` plus optional `detail`. Only the claim

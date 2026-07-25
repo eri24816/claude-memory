@@ -7,16 +7,17 @@ import re
 import unicodedata
 from dataclasses import dataclass, field
 
-# v1: only the world-describing types remain here. conv-pref, code-pref and
-# meta moved to files (see settings.py) because they are rules, which have a
-# current form rather than a history. `raw` is gone until 0.2.0 reintroduces it
-# with a per-query cap instead of a score penalty.
+# conv-pref, code-pref and meta moved to files (see settings.py) because they
+# are rules, which have a current form rather than a history. `raw` returns in
+# 0.2.0, bounded by a per-query cap in retrieval rather than the score penalty
+# that failed in v0.
 NODE_TYPES = frozenset({
     "fact",
     "action",
     "todo",
     "intention",
     "idea",
+    "raw",
 })
 
 # Named so the error can say where they went. A type that silently fails
@@ -25,13 +26,21 @@ RETIRED_TYPES = {
     "conv-pref": "settings/conv.md",
     "code-pref": "settings/code.md",
     "meta": "settings/meta.md",
-    "raw": "removed in 0.1.0; returns in 0.2.0",
 }
 
 # A word budget, not a character budget. Characters produce truncation-shaped
 # prose; words force the function words out, which is what makes a claim read
 # as "Eric will apply for Discovery card" rather than a clipped sentence.
 CLAIM_MAX_WORDS = 8
+
+# `raw` is the one exemption, because its claim is a different kind of object: a
+# heading path the page's author wrote, used as a label for a chunk whose content
+# is entirely in `detail`. Compressing "Networking > TLS > Session resumption" to
+# eight words would corrupt a locator to satisfy a rule written for assertions,
+# and the eight-word cap exists so a rendered claim is *complete* -- which a raw
+# claim can never be, which is why the node always carries `+`. A character
+# ceiling still applies, so one deep heading path cannot dominate a rendered row.
+RAW_CLAIM_MAX_CHARS = 80
 
 # Types that sit on the commitment ladder or describe the world, and therefore
 # must declare whether they fall inside the user's personal sphere.
@@ -122,6 +131,12 @@ def validate(node: Node) -> None:
         errors.append("id is required")
     if not node.claim or not node.claim.strip():
         errors.append("claim is required")
+    elif node.type == "raw":
+        if len(node.claim) > RAW_CLAIM_MAX_CHARS:
+            errors.append(
+                f"raw claim is {len(node.claim)} characters, max "
+                f"{RAW_CLAIM_MAX_CHARS}: {node.claim!r}"
+            )
     else:
         words = node.claim.split()
         if len(words) > CLAIM_MAX_WORDS:
@@ -134,6 +149,13 @@ def validate(node: Node) -> None:
         # An empty string is almost always an accident; NULL is the honest way
         # to say a node is claim-only, and it is the common case.
         errors.append("detail must be non-empty text or null, not an empty string")
+
+    # For every other type the detail is optional and usually absent. For raw it
+    # is the entire node -- the claim is only a heading -- so a raw node without
+    # one is a pointer to nothing, indexed and retrievable and carrying no
+    # content whatsoever.
+    if node.type == "raw" and not (node.detail and node.detail.strip()):
+        errors.append("raw requires detail: the claim is only a heading path")
 
     if node.type in RETIRED_TYPES:
         errors.append(

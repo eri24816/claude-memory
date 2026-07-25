@@ -130,7 +130,14 @@ dangling edge.
 
 `where` resolved paths for the store and settings files ·
 `--type <type>` restrict a search · `--limit N` (default 10) ·
-`--scope project:<name>` · `--json` raw rows with BM25 and vector ranks.
+`--scope project:<name>` · `--json` raw rows with BM25 and vector ranks ·
+`ingest <path>` heading-split markdown into `raw` chunks (`--dry-run` first).
+
+`raw` is the one type you do not write by hand — `ingest` produces it. A raw row is a
+document section: its claim is the heading path, so it always carries `+` and always
+needs a dig. At most two reach any mixed search, so a wiki cannot crowd out the store.
+If you dig one and it contains something worth keeping, supersede it with a typed claim;
+if you do not, nothing breaks.
 
 ## The background daemon
 

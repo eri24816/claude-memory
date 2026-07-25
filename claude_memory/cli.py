@@ -130,9 +130,10 @@ def main(argv: list[str] | None = None) -> int:
     rollback_parser = subparsers.add_parser("rollback", help="undo a capture run")
     rollback_parser.add_argument("capture_run_id")
 
-    # `ingest` is gone for 0.1.0 along with the `raw` type it produced. The
-    # module stays in the tree untouched: 0.2.0 revives it, and re-ingest is
-    # lossless now that nothing refines a raw node into something worth keeping.
+    ingest_parser = subparsers.add_parser("ingest", help="heading-split a file or folder")
+    ingest_parser.add_argument("path")
+    ingest_parser.add_argument("--scope", default="global")
+    ingest_parser.add_argument("--dry-run", action="store_true")
 
     where_parser = subparsers.add_parser(
         "where", help="print resolved paths for the store and the settings files"
@@ -241,6 +242,13 @@ def main(argv: list[str] | None = None) -> int:
 
         elif args.command == "rollback":
             _emit(store.rollback_run(connection, args.capture_run_id))
+
+        elif args.command == "ingest":
+            from . import ingest as ingest_module
+
+            _emit(ingest_module.ingest_path(
+                connection, args.path, scope=args.scope, dry_run=args.dry_run,
+            ))
 
         elif args.command == "where":
             from . import settings as settings_module
