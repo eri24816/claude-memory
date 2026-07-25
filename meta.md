@@ -29,9 +29,12 @@ through research — the moment you establish it, whether or not it leads to any
 decision. Capture a decision once one is actually made, with the reason it won, so
 it is not relitigated: a decision is not the same as a finding, and a finding does
 not need a decision to be worth saving. Capture the user's own request as an
-`action` when it triggers real work, separate from whatever that work produces. Do
-not save what is already plain from the code, git history, or existing docs. Lean
-toward saving when unsure: redundancy is cheap, a lost insight costs a session.
+`action` when it triggers real work, separate from whatever that work produces.
+Capture a floated idea even if abandoned, and an uncommitted wanting-to: `idea` and
+`intention` are the easiest to let pass, because nothing was concluded. Do not save
+what is plain from the code, git history or docs, nor transient task state. Lean
+toward saving when unsure — redundancy is cheap, a lost insight costs a session —
+though a turn with nothing to write is normal, not a failure.
 Say so in one line after an unprompted write.
 
 A stated preference is **not** a node. How you should communicate or behave is an

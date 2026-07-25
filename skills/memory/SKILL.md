@@ -43,13 +43,13 @@ python -m claude_memory remember --file nodes.json
 | `window_start` / `window_end` | ISO dates. **Convert relative to absolute** — "next August" → `2026-08-01`. Null end = unknown, not "forever". |
 | `scope` | `global` by default. `project:<name>` only if a session in another directory would not want it. **When in doubt, global** — a wrongly project-scoped node is invisible everywhere else, which fails silently. |
 
-| Type | Meaning |
-|---|---|
-| `fact` | A proposition true **at least since** `window_start` |
-| `action` | Someone did something — Eric, you, or a third party |
-| `todo` | Something necessary or decided; a todo list or calendar item |
-| `intention` | Someone wants to and may do something, not yet committed |
-| `idea` | A thought or proposal. Never carries `about_user` |
+| Type | Meaning | What the window means |
+|---|---|---|
+| `fact` | A proposition true **at least since** `window_start` | `[start, end]`; null end = unknown |
+| `action` | Someone did something — Eric, you, or a third party | the day it happened: `start` = `end`, a range only if durative |
+| `todo` | Something necessary or decided; a todo list or calendar item | `end` is the **due date**, if there is one |
+| `intention` | Someone wants to and may do something, not yet committed | when it was expressed |
+| `idea` | A thought or proposal. Never carries `about_user` | when it was thought |
 
 Disambiguation: names an action someone may take → `intention`. Decided or
 necessary → `todo`. Already happened → `action`. A concept or proposal → `idea`.
@@ -67,6 +67,19 @@ everything else goes, or moves to `detail`.
 A claim followed by `+` in rendered output means the node carries detail. If you
 are about to act on such a row, dig it first — the eight words are a pointer, not
 the node.
+
+### One node, one statement
+
+**Split when the time fields differ.** A year-long lease and the single day
+someone moves in are two nodes, because one node carries one window — fuse them
+and neither window is true.
+
+Restraint is part of the schema. Writing nothing is a correct and common
+outcome; never invent a node to look useful. If what you are about to write is a
+near-duplicate of something stored, supersede that node instead of adding a
+second one — the store can append but never merge. Transient task state ("we are
+debugging the parser right now") and conversational trivia are not nodes at any
+granularity.
 
 ## Read
 
@@ -98,6 +111,17 @@ node simply states what is true now:
 ```
 
 **No longer true, nothing replacing it** → `python -m claude_memory stale "<handle>"`.
+For an `intention`, only when the user says they no longer intend it — an
+intention nobody has acted on is still an intention, not a stale one.
+
+**Only completion supersedes.** An `action` that finishes a `todo` supersedes it;
+climbing the earlier rungs does not, because an idea keeps its own validity after
+spawning an intention. Those are `motivates` edges, below.
+
+**Supersede what you wrote earlier in this same session.** A working conversation
+reverses its own positions — something asserted at turn 12 and rejected by turn
+20 leaves both in the store unless the later turn supersedes the earlier. The
+`supersedes` handle resolves nodes from this session exactly like older ones.
 
 **You captured it wrong** → `remember` prints a `capture_run_id`;
 `python -m claude_memory rollback <id>` undoes that whole batch.
