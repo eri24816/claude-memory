@@ -85,6 +85,20 @@ def read(name: str) -> str:
 
 
 def write(name: str, text: str) -> Path:
+    """Write one of the user's rule files.
+
+    `meta` is not writable. Nothing in this program has any business editing it:
+    it is tracked in the repo, it describes the system rather than the user, and
+    a human changes it by editing the file. Refusing here rather than isolating
+    it in a fixture is what makes that true everywhere -- the one time it was a
+    fixture concern, a test wrote a two-line stub straight into the working tree
+    and truncated the default every clone gets.
+    """
+    if name in MODULE_FILES:
+        raise PermissionError(
+            f"{name}.md ships with the repo and is not written by this program; "
+            f"edit {path_for(name)} directly"
+        )
     path = path_for(name)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text.rstrip() + "\n", encoding="utf-8")

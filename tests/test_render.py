@@ -30,12 +30,12 @@ def connection():
 def test_prefs_lead_the_autoload_block(connection):
     """The pref files are the instructions for reading everything under them; a
     reader who meets the facts first has already read them wrong."""
-    settings.write("meta", "# How this memory works\nSearch before asking.")
     settings.write("conv", "# Behaviour\n- Be terse.")
 
     block = retrieval.render_t1(retrieval.assemble_t1(connection))
-    assert block.index("How this memory works") < block.index("## fact")
-    assert block.index("How this memory works") < block.index("# Behaviour")
+    meta_heading = settings.read("meta").splitlines()[0].lstrip("# ")
+    assert block.index(meta_heading) < block.index("# Behaviour")
+    assert block.index("# Behaviour") < block.index("## fact")
 
 
 def test_code_conventions_are_not_preloaded(connection):

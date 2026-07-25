@@ -34,19 +34,14 @@ def test_meta_ships_with_the_repo(fresh):
     # edit to it breaks the suite for no reason.
 
 
-def test_writing_meta_cannot_reach_the_real_repo(fresh):
-    """Regression. meta.md sits outside settings/, so CLAUDE_MEMORY_SETTINGS
-    does not isolate it -- and test_render legitimately writes a stub through
-    settings.write("meta"). That truncated the working tree's real meta.md, the
-    shipped default every clone gets, and the only reason it was noticed is that
-    the file is small enough to eyeball. A test suite must not be able to edit
-    the repo it is testing."""
-    settings.write("meta", "a stub written by a test")
-
-    assert settings.REPO_DIR != install.REPO_DIR, "conftest must redirect the repo dir"
-    assert "a stub written by a test" not in (
-        install.REPO_DIR / "meta.md"
-    ).read_text(encoding="utf-8")
+def test_meta_is_not_writable(fresh):
+    """Nothing in this program edits meta.md -- it is tracked, and a human edits
+    it in the checkout. Refusing makes that structural: while it was merely
+    nobody's job, a test wrote a two-line stub through settings.write("meta")
+    and truncated the working tree's copy, which is the default every clone
+    gets."""
+    with pytest.raises(PermissionError):
+        settings.write("meta", "a stub written by a test")
 
 
 def test_meta_is_not_written_into_the_user_settings_dir(fresh):
