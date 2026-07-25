@@ -143,11 +143,11 @@ def test_raw_hits_are_capped_per_query(connection, wiki):
                                                 raw_limit=99)
                 if hit["type"] == "raw"]
 
-    # Literal 2, not RAW_PER_QUERY: an assertion written against the constant
-    # moves with it, so raising the cap to 999 would leave this test green while
-    # the flood it exists to prevent came back.
-    assert len(raw_hits) <= 2
-    assert len(uncapped) > 2, "fixture cannot flood, so the cap is untested here"
+    assert len(raw_hits) <= retrieval.RAW_PER_QUERY
+    # The cap is only tested if the corpus could exceed it. Without this the
+    # test passes on a fixture too small to flood -- which it did, until a
+    # second page was added: MAX_PER_SOURCE already holds one page to two hits.
+    assert len(uncapped) > retrieval.RAW_PER_QUERY, "fixture cannot flood"
     assert any(hit["type"] != "raw" for hit in hits), "raw swamped the result set"
 
 
@@ -181,7 +181,7 @@ def test_asking_for_raw_explicitly_opts_out_of_the_cap(connection, wiki):
 
     hits = retrieval.search(connection, "TLS handshake certificate session",
                             limit=10, node_type="raw")
-    assert len(hits) > 2
+    assert len(hits) > retrieval.RAW_PER_QUERY
 
 
 def test_the_cap_does_not_shrink_what_the_caller_receives(connection, wiki):
