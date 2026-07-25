@@ -72,15 +72,13 @@ python -m claude_memory init
 This does three things, and re-running it is always safe:
 
 - creates the SQLite store and applies the schema;
-- writes `settings/meta.md` — the file that tells the agent this memory system
-  exists at all — plus empty `conv.md` and `code.md` for your own rules;
+- creates empty `settings/conv.md` and `settings/code.md` for your own rules;
 - links `skills/memory` and `skills/code-prefs` into `~/.claude/skills`.
 
-> `meta.md` is not optional. Without it the agent never learns these commands
-> exist and silently falls back to the file-based memory in its system prompt,
-> writing markdown into a directory nothing here reads. If you only want the
-> settings and skills part later — after editing `skills/`, say — run
-> `python -m claude_memory install`.
+The third one is the part that is easy to skip and impossible to notice: hooks
+fail silently, and a missing skill just means the agent quietly uses the wrong
+schema. Run `python -m claude_memory install` on its own whenever you want just
+that part again.
 
 The store lives in the repo by default, beside the preference files:
 
@@ -88,11 +86,17 @@ The store lives in the repo by default, beside the preference files:
 <repo>/settings/memory.db
 ```
 
-`settings/` holds everything you own — the store plus `conv.md`, `code.md` and
-`meta.md` — and is gitignored whole, so nothing ships as a default and a `git
-pull` can never conflict with a rule you wrote. It is deliberately **not** under
-`~/.claude/`, which belongs to the Claude Code harness rather than to this
-project.
+`settings/` holds everything you own — the store plus `conv.md` and `code.md` —
+and is gitignored whole, so nothing ships as a default and a `git pull` can never
+conflict with a rule you wrote. It is deliberately **not** under `~/.claude/`,
+which belongs to the Claude Code harness rather than to this project.
+
+`meta.md` is the exception: it sits at the repo root and **is** tracked. It
+describes how the memory system works rather than anything about you, so it
+should arrive with the clone and update with a `git pull`. It is also what tells
+the agent this system exists at all — without it the agent falls back to the
+file-based memory in its system prompt and writes markdown into a directory
+nothing here reads.
 
 To put it elsewhere, set these **before** running any command — the hooks read
 the same variables, so set them in your shell profile if you override them:
@@ -105,13 +109,6 @@ export CLAUDE_MEMORY_DB="/path/to/memory.db"        # just the store
 ```powershell
 $env:CLAUDE_MEMORY_SETTINGS = "C:\path\to\settings"
 ```
-
-**Upgrading an existing store?** If you already have one at
-`~/.claude/memory/memory.db` from before 0.1.0, do not run `init` — type
-`migrate to v0.1.0` in Claude Code, or see
-[MIGRATION-0.1.0.md](MIGRATION-0.1.0.md). Migration copies the old store to the
-new location rather than moving it, so the original stays valid until you delete
-it yourself.
 
 ---
 
@@ -173,16 +170,16 @@ python scripts/validate_hook_config.py
 
 ---
 
-## 5. Make the settings files yours
+## 5. Make the rule files yours
 
-Step 3 created three files in `settings/`. Nothing ships as a default rule, so
-two of them are empty:
+Three files hold rules, and nothing ships as a default preference, so the two
+that are yours start empty:
 
-| File | Loaded | What goes in it |
-|---|---|---|
-| `meta.md` | every session, whole | how this memory system works — written for you; edit only if you change the system |
-| `conv.md` | every session, whole | how the agent should communicate and behave |
-| `code.md` | via the `code-prefs` skill | build/test invocations, environment quirks, style rules |
+| File | Tracked | Loaded | What goes in it |
+|---|---|---|---|
+| `meta.md` (repo root) | yes | every session, whole | how this memory system works — edit only if you change the system |
+| `settings/conv.md` | no | every session, whole | how the agent should communicate and behave |
+| `settings/code.md` | no | via the `code-prefs` skill | build/test invocations, environment quirks, style rules |
 
 You don't have to write anything now: the agent edits these itself when you state
 a preference or correct it. The one rule is **merge, don't append** — that is the
@@ -265,7 +262,6 @@ python -m claude_memory where                   # resolved store + settings path
 python -m claude_memory snapshot backup.db      # consistent backup (VACUUM INTO)
 python -m claude_memory stale "<handle>"        # mark a node no longer true
 python -m claude_memory install                 # re-link skills, seed missing settings
-python -m claude_memory migration status        # is a pre-0.1.0 store waiting?
 ```
 
 `search` and `dig` take several arguments per call and should be used that way: a
@@ -289,5 +285,5 @@ commit the `.db`** (it's gitignored for that reason).
 | `ModuleNotFoundError: claude_memory` | not installed in that Python | `pip install -e .` in the right env |
 | Hooks do nothing, no error | they fail silently by design | run with `CLAUDE_MEMORY_DEBUG=1` |
 | `UnicodeEncodeError` on Windows | console codepage | already handled by the CLI; use `--file` for input |
-| Agent ignores memory, writes `~/.claude/memory/*.md` | no `settings/meta.md` | `python -m claude_memory install` |
+| Agent ignores memory, writes `~/.claude/memory/*.md` | `meta.md` empty or missing | restore it from git |
 | Agent uses an old field schema (`title`/`summary`) | installed skill is a stale copy | `python -m claude_memory install` |

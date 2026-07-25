@@ -130,8 +130,7 @@ dangling edge.
 
 `where` resolved paths for the store and settings files ·
 `--type <type>` restrict a search · `--limit N` (default 10) ·
-`--scope project:<name>` · `--json` raw rows with BM25 and vector ranks ·
-`migrate` upgrade an older store, see MIGRATION-0.1.0.md.
+`--scope project:<name>` · `--json` raw rows with BM25 and vector ranks.
 
 ## The background daemon
 

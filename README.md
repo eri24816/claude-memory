@@ -284,36 +284,24 @@ did want — merging — is exactly what a node cannot do. Facts kept the node s
 went home. The thing that changed is not the storage medium but which properties each
 kind of memory actually needs.
 
-### Migration
+### Installing
 
-The old store is **never modified**. It is opened read-only, its nodes are
-re-written into the new store through `remember` -- the same path every ordinary
-capture takes -- and it is left exactly where it is.
+`python -m claude_memory init` creates the store, creates the two empty rule
+files in `settings/`, and links both skills into `~/.claude/skills`. It is
+idempotent, and `install` runs the last two on their own.
 
-That removes almost everything a migration usually needs. No `ALTER TABLE`, so no
-half-applied schema. No relocation, so no file replaced under a live connection.
-No backup or rollback, because the old store *is* the backup. No resumable
-cursor, because the new store's contents are the progress record: an interrupted
-migration resumes by looking at what is already in it.
+`meta.md` is not seeded, because it is tracked in the repo — it describes the
+system rather than the user, so it arrives with the clone and updates with a
+`git pull`. It is also what tells the agent this system exists at all: without
+it the agent falls back to the file-based memory in its system prompt and writes
+markdown nothing here reads, a failure that is completely silent.
 
-The trigger is store **creation**, not a version comparison. When a hook finds no
-store it creates one, and that is the moment to notice a pre-0.1.0 store sitting
-elsewhere -- a check that needs no schema at all, unlike a version comparison,
-which can only be made by opening the old store as though it were current.
-
-Four steps, of which one is the agent's:
-
-1. A hook finds no store, so one is created.
-2. A legacy store exists, so `settings/migration.json` records `migrating` and
-   the old daemon is stopped -- verified by command line first, because a
-   discovery file outlives the process that wrote it and pids get reused.
-3. The agent reads the old nodes and re-writes them. Compressing a 700-character
-   summary into an 8-word claim is a judgement call per node, which is why this
-   step is not a script.
-4. `migration done` clears the flag. The old store stays: it is the only copy of
-   anything the agent chose not to carry.
-
-See `MIGRATION-0.1.0.md`.
+The skills are **linked, not copied**: a copy goes on teaching whatever schema it
+was copied from long after the repo has moved on.
+Symlink where the platform allows one, a directory junction on Windows (no
+elevation needed), and only then a copy — which reports `"linked": false`,
+because that is the one case where a repo edit does not reach the installed
+skill. See [INSTALL.md](INSTALL.md).
 
 ### Agent-facing API
 
@@ -326,7 +314,6 @@ an embedding, and search requires embedding the query — neither is expressible
 | `search(query, k, scope)` | hybrid RRF retrieval |
 | `assemble_t1(scope)` | the categorical T1 set |
 | `dig(handles...)` | expand nodes by id or claim, batched |
-| `migrate()` | upgrade an older store |
 | `sql(query)` | **read-only** escape hatch for the long tail |
 
 `search` and `dig` both take several arguments per call. A tool call is billed for its
@@ -443,7 +430,7 @@ The shape worth stating in prose, because it is a design decision rather than a 
 1:1 relations (`superseded_by`, `parent`, `derived_from`) are columns on `nodes` because
 they sit on the hot retrieval filters; everything 1:many or many:many lives in
 `node_edges`. `nodes_fts` and `nodes_vec` align by `rowid` with `nodes`, index claim
-*and* detail, and are both disposable — rebuilt wholesale by `migrate` or any reindex.
+*and* detail, and are both disposable — rebuilt wholesale by any reindex.
 
 ### Hybrid retrieval (RRF)
 

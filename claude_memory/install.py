@@ -1,24 +1,18 @@
 """One idempotent command that puts the moving parts where they belong.
 
-Three separate defects found after 0.1.0 shipped, all with the same shape --
-something the docs told a human to do by hand, which then drifted or was never
-done at all:
+What a working install needs beyond the store:
 
-  * `settings/meta.md` is what tells the agent this memory system exists. It was
-    hand-written during one migration and never shipped, and `settings/` is
-    gitignored whole, so every other user ended up with no meta file -- and an
-    agent with no meta file silently falls back to the file-based memory in its
-    system prompt, writing markdown into a directory nothing reads.
-  * The skills were installed with `cp`. A copy stops tracking its source: after
-    0.1.0 the installed `memory` skill still taught the pre-0.1.0 title+summary
-    schema while the repo taught claim+detail, so meta.md's "load the memory
-    skill" handed the next session the wrong field schema.
-  * `skills/code-prefs` had never been installed at all, so the trigger line
-    pointing at it pointed at nothing.
+  * The skills discoverable from `~/.claude/skills`. They are *linked*, not
+    copied, so a repo edit is live everywhere by construction; a copy stops
+    tracking its source and goes on teaching whatever it was copied from.
+  * `settings/conv.md` and `settings/code.md` to exist, empty, so the agent has
+    somewhere obvious to put a rule it is told.
 
-So: seed from a template that lives in the package, and *link* the skills so a
-repo edit is live everywhere by construction. Re-running is always safe, and is
-the documented fix after any change to `skills/`.
+`meta.md` is not here: it describes the system rather than the user, so it is
+tracked in the repo and arrives with the clone.
+
+Re-running is always safe, and is the documented fix after any change to
+`skills/` on a platform where linking was not possible.
 """
 
 from __future__ import annotations
@@ -151,10 +145,7 @@ def _link_skill(name: str, destination_root: Path) -> dict[str, Any]:
 def _seed_settings() -> list[dict[str, Any]]:
     """Write the settings files that are missing. Never overwrites."""
     results = []
-    template = (PACKAGE_DIR / "meta_template.md").read_text(encoding="utf-8")
-    wanted = {"meta": template, **STUBS}
-
-    for name, text in wanted.items():
+    for name, text in STUBS.items():
         path = settings.path_for(name)
         if path.exists() and path.read_text(encoding="utf-8-sig").strip():
             results.append({"file": str(path), "status": "kept"})

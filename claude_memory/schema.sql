@@ -1,15 +1,14 @@
 -- claude-memory schema v1 (0.1.0). See README.md for the design rationale.
 --
--- v1 replaces (title, summary) with (claim, detail). The old summary was
--- contracted to be one sentence and averaged 684 characters in practice --
--- not from carelessness, but because detail had nowhere else to live. Giving
--- it a home makes the short form followable: `claim` is capped at 8 words and
--- is the only thing rendered by default, `detail` holds the rest and is
--- returned only by dig.
+-- A node is (claim, detail). An earlier design used (title, summary), where the
+-- summary was contracted to be one sentence and averaged 684 characters in
+-- practice -- not from carelessness, but because detail had nowhere else to
+-- live. Giving it a home makes the short form followable: `claim` is capped at
+-- 8 words and is the only thing rendered by default, `detail` holds the rest
+-- and is returned only by dig.
 --
--- The version lives in PRAGMA user_version and is set by migrate/init, never
--- by applying this file -- an un-migrated store must stay recognisable as one
--- even though every CREATE below is IF NOT EXISTS and would no-op against it.
+-- Every CREATE below is IF NOT EXISTS, so applying this file to a live store is
+-- a no-op. The version lives in PRAGMA user_version.
 
 PRAGMA journal_mode = WAL;
 PRAGMA foreign_keys = ON;

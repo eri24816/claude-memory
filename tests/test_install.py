@@ -1,8 +1,8 @@
 """Installing onto a machine that is not the author's.
 
-Every case here is a defect that shipped in 0.1.0 and was found by a real
-migration, not a hypothetical. The shared shape: a step the docs asked a human
-to do by hand, which was then done once and never again.
+Every case here was once a step in a doc, and each one failed the same way: done
+by hand once, then silently out of date. The failures are all silent, which is
+why they are tested rather than documented.
 """
 
 from __future__ import annotations
@@ -21,21 +21,24 @@ def fresh(tmp_path, monkeypatch):
     return tmp_path
 
 
-def test_meta_is_seeded_because_a_store_without_it_is_not_an_install(fresh):
-    """The defect this exists for: settings/ is gitignored whole, so meta.md
-    shipped with nobody. An agent with no meta file is never told these commands
-    exist and falls back to writing markdown into ~/.claude/, which nothing here
-    reads -- a silent, total failure that looks like a working install."""
+def test_meta_ships_with_the_repo(fresh):
+    """meta.md describes the system, not the user, so it is tracked and arrives
+    with the clone -- no seeding step to skip and no `git pull` that leaves it
+    behind. An agent without it is never told these commands exist and falls
+    back to writing markdown into ~/.claude/, which nothing here reads: a silent
+    failure that looks like a working install."""
+    assert settings.path_for("meta") == install.REPO_DIR / "meta.md"
+    assert settings.read("meta"), "a clone must arrive with a non-empty meta.md"
+    # Deliberately no assertion on the prose. It is the one file whose whole
+    # purpose is to be rewritten -- pinning its wording here would mean every
+    # edit to it breaks the suite for no reason.
+
+
+def test_meta_is_not_written_into_the_user_settings_dir(fresh):
+    """One home. A copy under settings/ would shadow the tracked file and go
+    stale on the next pull -- the drift this repo keeps removing."""
     install.run()
-
-    text = settings.read("meta")
-    assert "claude_memory search" in text
-    assert "code-prefs" in text, "the trigger for conventions must survive seeding"
-
-
-def test_the_template_does_not_name_the_author(fresh):
-    install.run()
-    assert "Eric" not in settings.read("meta")
+    assert not (fresh / "settings" / "meta.md").exists()
 
 
 def test_conv_and_code_are_created_empty(fresh):
@@ -59,8 +62,9 @@ def test_existing_settings_are_never_overwritten(fresh):
 
 
 def test_both_skills_are_installed(fresh):
-    """code-prefs had never been installed at all, so meta.md's
-    load-code-prefs-before-writing-code trigger pointed at nothing."""
+    """Both, not just `memory`: meta.md carries a
+    load-code-prefs-before-writing-code trigger, and a trigger pointing at a
+    skill that was never installed fails without saying anything."""
     result = install.run()
 
     names = {entry["skill"] for entry in result["skills"]}
@@ -70,13 +74,12 @@ def test_both_skills_are_installed(fresh):
 
 
 def test_a_stale_copy_is_replaced(fresh):
-    """The drift that was actually observed: after 0.1.0 the installed `memory`
-    skill still taught the pre-0.1.0 title+summary schema while the repo taught
-    claim+detail, so meta.md's "load the memory skill" handed the next session
-    the wrong field schema."""
+    """The drift that motivated linking: an installed copy goes on teaching the
+    schema it was copied from, so meta.md's "load the memory skill" hands the
+    next session field names that no longer exist."""
     stale = fresh / "skills" / "memory"
     stale.mkdir(parents=True)
-    (stale / "SKILL.md").write_text("title + summary, the old schema", encoding="utf-8")
+    (stale / "SKILL.md").write_text("an outdated schema", encoding="utf-8")
 
     install.run()
 
@@ -125,12 +128,14 @@ def test_a_copy_fallback_says_so(fresh, monkeypatch):
     assert (fresh / "skills" / "memory" / "SKILL.md").exists()
 
 
-def test_init_seeds_as_well(fresh, capsys, monkeypatch):
-    """`init` is the command the doc names first. A store with no meta.md is a
-    broken install, so the two cannot be separate steps."""
+def test_init_installs_as_well(fresh, capsys, monkeypatch):
+    """`init` is the command the doc names first, so it does the whole job. A
+    store with no skills linked is not a working install, and a second step is a
+    second step to forget."""
     monkeypatch.setenv("CLAUDE_MEMORY_NO_DAEMON", "1")
     assert cli.main(["--db", str(fresh / "memory.db"), "init"]) == 0
 
     payload = json.loads(capsys.readouterr().out)
     assert payload["db"].endswith("memory.db")
-    assert settings.path_for("meta").exists()
+    assert (fresh / "skills" / "memory" / "SKILL.md").exists()
+    assert settings.path_for("conv").exists()

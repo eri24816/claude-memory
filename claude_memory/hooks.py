@@ -49,62 +49,6 @@ MAINTENANCE_REMINDER = (
     "now. If none do, say so in one line and continue."
 )
 
-# Emitted by SessionStart and UserPromptSubmit while a pre-0.1.0 store is still
-# waiting to be carried across. Once per message, not once per session: a session
-# that started before the flag was set would otherwise go on treating memory as
-# empty, which from the inside is indistinguishable from a user who has never
-# said anything.
-#
-# NOT emitted from Stop. Stop's additionalContext forces the turn to continue, so
-# anything unconditional there makes the conversation unable to end, and
-# UserPromptSubmit already covers every path into a turn.
-MIGRATION_NOTICE = (
-    "MEMORY IS MID-MIGRATION. A pre-0.1.0 store with {total} nodes is at {legacy} "
-    "and has not been carried into the new store yet. Memory is NOT empty -- the "
-    "old nodes are simply not here, so do not conclude that anything was never "
-    "saved.\n"
-    "Ask the user whether to migrate now. If they agree, follow {doc}. The old "
-    "store is only ever read, so this is safe to start and safe to stop halfway."
-)
-
-# A different failure with the same symptom: the configured store IS the old one,
-# because CLAUDE_MEMORY_DB points at it. Nothing can be done from inside that
-# store, so the notice says where to point instead.
-LEGACY_TARGET_NOTICE = (
-    "MEMORY IS MISCONFIGURED. The store at {db} is a pre-0.1.0 store, and this "
-    "code cannot read or write it. Unset CLAUDE_MEMORY_DB (or point it at a new "
-    "path) so a current store is created, then follow {doc} to carry the old "
-    "nodes across."
-)
-
-
-def _doc_path() -> Path:
-    return Path(__file__).resolve().parent.parent / "MIGRATION-0.1.0.md"
-
-
-def migration_notice(connection: sqlite3.Connection) -> str:
-    """The notice, or empty if memory is ready to use."""
-    from . import db, migration
-
-    columns = {row[1] for row in connection.execute("PRAGMA table_info(nodes)")}
-    if columns and "claim" not in columns:
-        attached = connection.execute("PRAGMA database_list").fetchone()
-        return LEGACY_TARGET_NOTICE.format(
-            db=attached["file"] if attached and attached["file"] else db.DEFAULT_DB_PATH,
-            doc=_doc_path(),
-        )
-
-    if not migration.is_migrating():
-        return ""
-
-    state = migration.read_state()
-    return MIGRATION_NOTICE.format(
-        total=state.get("legacy_total", "some"),
-        legacy=state.get("legacy_db", db.LEGACY_DB_PATH),
-        doc=_doc_path(),
-    )
-
-
 def scope_for_cwd(cwd: str | None) -> str:
     """Derive a stable project scope from a working directory.
 
@@ -143,13 +87,6 @@ def build_session_start_context(payload: dict, connection: sqlite3.Connection) -
     """
     from . import retrieval
 
-    notice = migration_notice(connection)
-    if notice:
-        # Returned alone. A half-converted store renders claims that are still
-        # NULL and facts that may already have been deleted, and a stale autoload
-        # block that looks normal is worse than none: the agent would act on it.
-        return notice
-
     scope = scope_for_cwd(payload.get("cwd") or os.getcwd())
     return retrieval.render_t1(retrieval.assemble_t1(connection, scope=scope))
 
@@ -162,13 +99,6 @@ def build_user_prompt_context(payload: dict, connection: sqlite3.Connection) -> 
     message that needed none is worse than injecting nothing.
     """
     from . import retrieval
-
-    # Checked before the should_retrieve gate, not after: the gate exists to
-    # avoid injecting irrelevant nodes into "ok" and "yes", but a broken store
-    # is not a relevance question. It is equally true on every message.
-    notice = migration_notice(connection)
-    if notice:
-        return notice
 
     prompt = (payload.get("prompt") or "").strip()
     if not prompt or not retrieval.should_retrieve(prompt):
@@ -212,17 +142,6 @@ def build_stop_context(payload: dict, connection: sqlite3.Connection) -> str:
 
     count = _bump_stop_count(connection, session_id)
     if count % MAINTAIN_EVERY != 0:
-        return ""
-
-    # The migration notice deliberately does NOT go here. Stop's additionalContext
-    # forces the turn to continue, so anything unconditional makes the
-    # conversation unable to end -- and UserPromptSubmit already fires on every
-    # message, which is every path into a turn. Nothing is lost by leaving Stop
-    # alone, and the failure mode avoided is severe.
-    #
-    # What IS suppressed: the reminder itself, once the store is behind. Telling
-    # an agent to capture what it learned is noise when every write would raise.
-    if migration_notice(connection):
         return ""
 
     return MAINTENANCE_REMINDER.format(count=count)

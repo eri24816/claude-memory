@@ -33,6 +33,12 @@ FILES = {
     "meta": "How this memory system works",
 }
 
+# `meta` is the odd one out: it describes the *system*, not the user, so it ships
+# with the repo and a `git pull` updates it. The other two hold what the user
+# tells the agent about themselves, so they live in the gitignored settings
+# directory and nothing ships as a default.
+MODULE_FILES = {"meta"}
+
 # Only these two are autoloaded. `code` is reached through a skill instead: it is
 # the largest of the three and irrelevant to every session that writes no code,
 # so paying for it on every session start is waste.
@@ -50,7 +56,8 @@ PRELOADED = ("meta", "conv")
 # same rule is exactly the drift this move was meant to end.
 RETIRED_TYPES = frozenset({"conv-pref", "code-pref", "meta"})
 
-DEFAULT_SETTINGS_DIR = Path(__file__).resolve().parent.parent / "settings"
+REPO_DIR = Path(__file__).resolve().parent.parent
+DEFAULT_SETTINGS_DIR = REPO_DIR / "settings"
 
 
 def settings_dir() -> Path:
@@ -60,14 +67,16 @@ def settings_dir() -> Path:
 def path_for(name: str) -> Path:
     if name not in FILES:
         raise KeyError(f"unknown settings file {name!r}; expected one of {sorted(FILES)}")
+    if name in MODULE_FILES:
+        return REPO_DIR / f"{name}.md"
     return settings_dir() / f"{name}.md"
 
 
 def read(name: str) -> str:
     """The file's text, or empty if it was never written.
 
-    Missing is normal, not an error: migration only creates a file for a user
-    who already had nodes of that kind, and a fresh install has none.
+    Missing is normal, not an error: `install` seeds these, but the store works
+    without them and someone may delete one.
     """
     try:
         return path_for(name).read_text(encoding="utf-8-sig").strip()

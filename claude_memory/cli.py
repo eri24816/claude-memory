@@ -72,30 +72,6 @@ def _deny_writes(action, *_args):
     return sqlite3.SQLITE_OK if action in READ_ONLY_ACTIONS else sqlite3.SQLITE_DENY
 
 
-def _migration(args) -> int:
-    """The migration subcommand. Read-only against the old store throughout.
-
-    Opens the current store only for `status`, which reports progress by
-    counting what is already there -- the new store's own contents are the
-    progress record, so there is no separate cursor to keep in sync.
-    """
-    from . import migration
-
-    if args.migration_command == "list":
-        _emit(migration.list_nodes(limit=args.limit, offset=args.offset))
-        return 0
-    if args.migration_command == "done":
-        _emit(migration.done())
-        return 0
-
-    connection = db.connect(args.db)
-    try:
-        _emit(migration.status(connection))
-    finally:
-        connection.close()
-    return 0
-
-
 def main(argv: list[str] | None = None) -> int:
     _use_utf8_stdout()
     parser = argparse.ArgumentParser(prog="claude_memory")
@@ -158,16 +134,6 @@ def main(argv: list[str] | None = None) -> int:
     # module stays in the tree untouched: 0.2.0 revives it, and re-ingest is
     # lossless now that nothing refines a raw node into something worth keeping.
 
-    migration_parser = subparsers.add_parser(
-        "migration", help="carry a pre-0.1.0 store across; see MIGRATION-0.1.0.md"
-    )
-    migration_sub = migration_parser.add_subparsers(dest="migration_command", required=True)
-    migration_sub.add_parser("status", help="what is left to carry across")
-    list_parser = migration_sub.add_parser("list", help="old nodes to re-write")
-    list_parser.add_argument("--limit", type=int, default=25)
-    list_parser.add_argument("--offset", type=int, default=0)
-    migration_sub.add_parser("done", help="clear the flag; leaves the old store alone")
-
     where_parser = subparsers.add_parser(
         "where", help="print resolved paths for the store and the settings files"
     )
@@ -186,17 +152,6 @@ def main(argv: list[str] | None = None) -> int:
     daemon_parser.add_argument("action", choices=["start", "stop", "status"])
 
     args = parser.parse_args(argv)
-
-    if args.command == "migration":
-        # Dispatched BEFORE connecting, and that ordering is load-bearing.
-        # `run` may replace the file at the target path -- relocating a
-        # pre-0.1.0 store from ~/.claude -- and a connection opened beforehand
-        # goes on serving the header it cached at open time. The observed
-        # failure: an empty stamped store at the target made `run` report
-        # "already at v1" and do nothing, while the freshly copied v0 data sat
-        # underneath it. Reporting success while doing nothing is far worse than
-        # failing, because the caller moves on.
-        return _migration(args)
 
     connection = db.connect(args.db)
 
