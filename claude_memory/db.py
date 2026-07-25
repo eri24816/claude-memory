@@ -16,7 +16,10 @@ SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 # belongs to the Claude Code harness; everything this project owns -- rules and
 # nodes alike -- is project-managed and moves together. v0 split them, so a
 # re-clone kept the database and lost the prefs.
-LEGACY_DB_PATH = Path.home() / ".claude" / "memory" / "memory.db"
+LEGACY_DB_PATH = Path(
+    os.environ.get("CLAUDE_MEMORY_LEGACY_DB")
+    or Path.home() / ".claude" / "memory" / "memory.db"
+)
 
 DEFAULT_DB_PATH = Path(
     os.environ.get("CLAUDE_MEMORY_DB") or settings.settings_dir() / "memory.db"
@@ -77,12 +80,24 @@ def init_schema(connection: sqlite3.Connection) -> None:
     ).fetchone() is None
 
     if not fresh and needs_migration(connection):
-        # A v0 store cannot take this file at all -- `CREATE INDEX ... ON
-        # nodes(claim)` fails outright on a table that still has (title,
-        # summary). Applying nothing is the correct answer: migrate owns the
-        # conversion, and every other command already refuses to run against an
-        # un-migrated store rather than half-working.
-        return
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(nodes)")}
+        if "claim" in columns:
+            # Already v1 in shape but never stamped -- a store created by a build
+            # that had the new schema and not yet the version stamp. Without this
+            # it is stuck forever: the branch below would return early on every
+            # connect, so it could never earn the stamp, and `migrate` would keep
+            # reporting an upgrade that has nothing left to do. Infer the version
+            # from the shape, since the shape is the ground truth the stamp only
+            # summarises.
+            connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            connection.commit()
+        else:
+            # A genuine v0 store cannot take this file at all -- `CREATE INDEX ...
+            # ON nodes(claim)` fails outright on a table that still has (title,
+            # summary). Applying nothing is correct: migrate owns the conversion,
+            # and every other command refuses to run against an un-migrated store
+            # rather than half-working.
+            return
 
     connection.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
     if fresh:

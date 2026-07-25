@@ -19,10 +19,21 @@ reads this file and does the rest. You do not need the details below.
 
 ## Before you start
 
-**Stop every other Claude session.** They write to the same store. A node
-written between the schema change and the last `--set` lands with `claim IS NULL`
-and silently joins the pending set — recoverable, but confusing. `claude agents
---json` lists the running ones.
+**Stop every other Claude session.** `claude agents --json` lists them. Two real
+reasons, neither of which is data loss during normal operation:
+
+1. **The backup is a point-in-time copy.** `migrate` snapshots the store before
+   touching it. Anything another session writes after that snapshot exists only
+   in the live store, so `--rollback` would silently discard it.
+2. **The conversion takes exclusive locks.** `ALTER TABLE nodes DROP COLUMN` and
+   the index rebuild cannot run while another connection holds a write lock;
+   SQLite fails them with `database is locked` rather than waiting indefinitely.
+   Half-applied is recoverable — `run` is idempotent — but it is avoidable noise.
+
+*Not* a reason, contrary to an earlier draft of this file: nodes written by
+another session mid-migration do **not** land as `claim IS NULL`. Once the schema
+is converted, `remember` enforces the claim like any other write, so those nodes
+are complete and simply do not appear in `--next`.
 
 Migration takes a backup automatically (`memory.pre-0.1.0.db`) and copies rather
 than moves the legacy store, so the original at `~/.claude/memory/` stays valid

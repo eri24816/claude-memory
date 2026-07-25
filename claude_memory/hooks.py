@@ -72,12 +72,55 @@ MIGRATION_NOTICE = (
 )
 
 
+ORPHANED_LEGACY_NOTICE = (
+    "MEMORY IS NOT MIGRATED. The configured store at {db} is empty, but a "
+    "pre-0.1.0 store with {count} nodes is sitting unmigrated at {legacy}. "
+    "Memory is NOT empty -- it is unreachable, so do not conclude that anything "
+    "was never saved.\n"
+    "Ask the user whether to migrate now. If they agree, follow {doc}."
+)
+
+
+def _legacy_node_count() -> int:
+    """Nodes in the pre-0.1.0 store, or 0 if there is nothing there."""
+    import sqlite3 as _sqlite3
+
+    from . import db
+
+    if not db.LEGACY_DB_PATH.exists():
+        return 0
+    try:
+        with _sqlite3.connect(f"file:{db.LEGACY_DB_PATH}?mode=ro", uri=True) as old:
+            return old.execute("SELECT COUNT(*) FROM nodes").fetchone()[0]
+    except _sqlite3.DatabaseError:
+        return 0
+
+
 def migration_notice(connection: sqlite3.Connection) -> str:
-    """The notice, or empty if the store is current."""
+    """The notice, or empty if the store is current and actually holds the data.
+
+    Two distinct failures, and the second is the dangerous one. An un-migrated
+    store announces itself through the version stamp. But an *empty* store at the
+    new path is perfectly valid and stamps itself current, so a user whose data
+    still sits at the legacy path would get a clean, silent, empty memory -- which
+    reads exactly like "you never told me anything" rather than "your data is over
+    there". Nothing else in the system would ever notice.
+    """
     from . import db
 
     if not db.needs_migration(connection):
-        return ""
+        if connection.execute("SELECT COUNT(*) FROM nodes").fetchone()[0]:
+            return ""
+        legacy_count = _legacy_node_count()
+        if not legacy_count:
+            return ""
+        attached = connection.execute("PRAGMA database_list").fetchone()
+        return ORPHANED_LEGACY_NOTICE.format(
+            db=attached["file"] if attached and attached["file"] else db.DEFAULT_DB_PATH,
+            legacy=db.LEGACY_DB_PATH,
+            count=legacy_count,
+            doc=Path(__file__).resolve().parent.parent / "MIGRATION-0.1.0.md",
+        )
 
     # The file this connection actually opened, not DEFAULT_DB_PATH. An
     # un-migrated store is by definition still at the old location, so the
