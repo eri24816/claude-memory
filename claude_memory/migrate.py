@@ -253,6 +253,23 @@ def run(
 
 def status(connection: sqlite3.Connection) -> dict[str, Any]:
     if not db.needs_migration(connection):
+        # "Up to date" is a lie if the store this is looking at is empty while a
+        # populated pre-0.1.0 store waits at the legacy path. An empty current
+        # store is a perfectly valid state, so the version stamp alone cannot
+        # tell the two apart -- and this command is the one the migration doc
+        # tells an agent to run to confirm it is finished.
+        from .hooks import _legacy_node_count
+
+        if not connection.execute("SELECT COUNT(*) FROM nodes").fetchone()[0]:
+            legacy = _legacy_node_count()
+            if legacy:
+                return {
+                    "version": db.user_version(connection),
+                    "status": "NOT migrated: this store is empty",
+                    "legacy_store": str(db.LEGACY_DB_PATH),
+                    "legacy_nodes": legacy,
+                    "next": "python -m claude_memory migrate",
+                }
         return {"version": db.user_version(connection), "status": "up to date"}
     if "claim" not in _columns(connection, "nodes"):
         return {"version": 0, "status": "not started",

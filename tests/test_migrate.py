@@ -355,3 +355,23 @@ def test_an_empty_stamped_target_does_not_swallow_the_migration(v0_store, tmp_pa
         assert migrated.execute("SELECT COUNT(*) FROM nodes").fetchone()[0] == 2
     finally:
         migrated.close()
+
+
+def test_status_does_not_call_an_empty_store_up_to_date(v0_store, tmp_path,
+                                                        monkeypatch):
+    """`migrate --status` is what the migration doc tells an agent to run to
+    confirm it is done. An empty store at the configured path is validly stamped
+    current, so the version alone would report success while the real data waits
+    at the legacy path."""
+    target = tmp_path / "settings" / "memory.db"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(db, "LEGACY_DB_PATH", v0_store)
+
+    connection = db.connect(target)
+    try:
+        report = migrate.status(connection)
+        assert report["status"].startswith("NOT migrated")
+        assert report["legacy_nodes"] == len(V0_NODES)
+        assert str(v0_store) in report["legacy_store"]
+    finally:
+        connection.close()
