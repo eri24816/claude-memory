@@ -30,6 +30,21 @@ BACKUP_SUFFIX = ".pre-0.1.0"
 PREF_TYPES = {"conv-pref": "conv", "code-pref": "code", "meta": "meta"}
 
 
+def _stop_daemon() -> int | None:
+    """Stop the embedding daemon, tolerating every way that can fail.
+
+    Best-effort by design: a daemon that is not running, cannot be reached, or
+    refuses to die must not block a migration. The cost of it surviving is a
+    stale reader, not a corrupt store.
+    """
+    try:
+        from . import daemon
+
+        return daemon.stop()
+    except Exception:  # pragma: no cover - defensive
+        return None
+
+
 def backup_path(target: Path) -> Path:
     return target.with_suffix(BACKUP_SUFFIX + target.suffix)
 
@@ -191,8 +206,18 @@ def run(
     configured path so the common case needs no argument.
     """
     target = Path(target or db.DEFAULT_DB_PATH)
-    moved = relocate(target)
 
+    # Stop the daemon first, and do it here rather than telling the user to.
+    # It is the only long-lived process in the system: every session touches the
+    # store through short-lived hook processes that pick up new code for free,
+    # while the daemon holds whatever it imported at start-up. Left running, it
+    # would go on serving retrieval from the pre-migration build against a store
+    # that no longer matches it. It also opens a connection on any session's
+    # message, which is precisely the concurrent writer the DDL below cannot
+    # tolerate. SessionStart brings it back automatically afterwards.
+    stopped = _stop_daemon()
+
+    moved = relocate(target)
     connection = connection or db.connect(target)
     if not db.needs_migration(connection):
         return {"status": "already at v1", "version": db.user_version(connection)}
@@ -208,6 +233,7 @@ def run(
         report = {"pending": _pending_count(connection)}
 
     report["relocation"] = moved
+    report["daemon_stopped"] = stopped
     report["status"] = "schema converted; claims pending"
     report["next"] = (
         "python -m claude_memory migrate --next 20  # then --set with the claims"

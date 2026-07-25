@@ -66,9 +66,9 @@ MIGRATION_NOTICE = (
     "expects v{expected}. Until it is migrated, retrieval returns nothing and "
     "every write fails -- so treat memory as unavailable rather than empty, and "
     "do not conclude that anything is 'not in memory'.\n"
-    "Ask the user whether to migrate now. If they agree, follow {doc} "
-    "(it needs other Claude sessions stopped first). If they decline, carry on "
-    "without memory and do not ask again this session."
+    "Ask the user whether to migrate now. If they agree, follow {doc} -- other "
+    "sessions do NOT need stopping, and migrate stops the daemon itself. If they "
+    "decline, carry on without memory and do not ask again this session."
 )
 
 

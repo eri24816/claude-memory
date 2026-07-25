@@ -290,3 +290,33 @@ def test_a_migrated_store_says_nothing(v0_store):
     assert "MEMORY IS NOT WORKING" not in hooks.build_session_start_context(
         {"cwd": "/tmp"}, connection
     )
+
+
+def test_migrate_stops_the_daemon(v0_store, monkeypatch):
+    """The daemon is the only long-lived process here: sessions reach the store
+    through short-lived hook processes that pick up new code for free, while the
+    daemon serves from whatever it imported at start-up."""
+    from claude_memory import daemon
+
+    calls = []
+    monkeypatch.setattr(daemon, "stop", lambda: calls.append(True) or 4321)
+
+    connection = _connect(v0_store)
+    report = migrate.run(connection, v0_store)
+
+    assert calls, "migration must not leave a stale reader running"
+    assert report["daemon_stopped"] == 4321
+
+
+def test_a_dead_daemon_does_not_block_migration(v0_store, monkeypatch):
+    """Best-effort: the cost of a surviving daemon is a stale reader, not a
+    corrupt store, so it must never be the thing that stops an upgrade."""
+    from claude_memory import daemon
+
+    def boom():
+        raise OSError("no daemon here")
+
+    monkeypatch.setattr(daemon, "stop", boom)
+
+    connection = _connect(v0_store)
+    assert migrate.run(connection, v0_store)["pending"] == 2

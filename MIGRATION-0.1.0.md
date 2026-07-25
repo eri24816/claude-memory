@@ -19,16 +19,22 @@ reads this file and does the rest. You do not need the details below.
 
 ## Before you start
 
-**Stop every other Claude session.** `claude agents --json` lists them. Two real
-reasons, neither of which is data loss during normal operation:
+**You do not need to stop other Claude sessions.** Every session reaches the
+store through short-lived hook and CLI processes, which pick up the new code for
+free. Their writes are already failing anyway, since they are running v1 code
+against a v0 store.
 
-1. **The backup is a point-in-time copy.** `migrate` snapshots the store before
-   touching it. Anything another session writes after that snapshot exists only
-   in the live store, so `--rollback` would silently discard it.
-2. **The conversion takes exclusive locks.** `ALTER TABLE nodes DROP COLUMN` and
-   the index rebuild cannot run while another connection holds a write lock;
-   SQLite fails them with `database is locked` rather than waiting indefinitely.
-   Half-applied is recoverable — `run` is idempotent — but it is avoidable noise.
+**The daemon is the exception, and `migrate` stops it for you.** It is the only
+long-lived process here, so it holds whatever code it imported at start-up and
+would keep serving retrieval from the pre-migration build against a store that no
+longer matches it. It also opens a connection whenever any session sends a
+message, which is exactly the concurrent writer that `ALTER TABLE ... DROP
+COLUMN` cannot tolerate. `SessionStart` starts it again automatically afterwards.
+
+The one thing worth knowing: **the backup is a point-in-time copy**, taken before
+any change. Anything written after it exists only in the live store, so
+`--rollback` would discard it. That is a reason to migrate promptly rather than
+to shut anything down.
 
 *Not* a reason, contrary to an earlier draft of this file: nodes written by
 another session mid-migration do **not** land as `claim IS NULL`. Once the schema
