@@ -74,7 +74,17 @@ def _project_2d(vectors: list[list[float]], iterations: int = 32) -> list[tuple[
 
 @app.get("/")
 def index() -> FileResponse:
-    return FileResponse(STATIC_DIR / "index.html")
+    """The shell, explicitly uncacheable.
+
+    Everything is inlined in this one file, so with only etag/last-modified the
+    browser applies *heuristic* caching and goes on serving an old copy against
+    a new server. That is not hypothetical here: after the claim/detail rename
+    the page rendered a `SUMMARY` header and blank rows from cache while the API
+    was already returning correct data.
+    """
+    return FileResponse(
+        STATIC_DIR / "index.html", headers={"Cache-Control": "no-cache"}
+    )
 
 
 @app.get("/api/stats")
@@ -141,7 +151,7 @@ def nodes(
     elif state == "superseded":
         clauses.append("superseded_by IS NOT NULL")
     if q:
-        clauses.append("(summary LIKE ? OR title LIKE ? OR id LIKE ?)")
+        clauses.append("(claim LIKE ? OR detail LIKE ? OR id LIKE ?)")
         params.extend([f"%{q}%"] * 3)
 
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
@@ -149,7 +159,7 @@ def nodes(
     try:
         rows = connection.execute(
             f"""
-            SELECT id, title, summary, type, about_user, scope,
+            SELECT id, claim, detail, type, about_user, scope,
                    window_start, window_end, stale, superseded_by, origin,
                    parent, source_session, updated
             FROM nodes {where}
@@ -175,7 +185,7 @@ def graph(scope: str | None = None) -> dict[str, Any]:
             params.append(scope)
         rows = connection.execute(
             f"""
-            SELECT n.id, n.title, n.summary, n.type, n.about_user, n.scope,
+            SELECT n.id, n.claim, n.detail, n.type, n.about_user, n.scope,
                    n.parent, n.stale, v.embedding
             FROM nodes AS n
             JOIN nodes_vec AS v ON v.rowid = n.rowid
@@ -240,15 +250,22 @@ def search(
 
 
 @app.get("/api/dig")
-def dig(title: str) -> dict[str, Any]:
-    """Expand one node by the title retrieval printed."""
+def dig(handle: str) -> dict[str, Any]:
+    """Expand one node by the id or claim retrieval printed.
+
+    A fragment matching several nodes comes back as an error rather than as a
+    miss -- reporting "nothing found" for an ambiguous handle is how a caller
+    ends up writing a duplicate of something already stored.
+    """
     connection = _connection()
     try:
-        node = retrieval.dig(connection, title)
+        node = retrieval.dig(connection, handle)
+        ambiguous = bool(node and node.get("error"))
         return {
-            "found": node is not None,
-            "node": node,
-            "block": retrieval.render_dig(node, title),
+            "found": node is not None and not ambiguous,
+            "ambiguous": ambiguous,
+            "node": None if ambiguous else node,
+            "block": retrieval.render_digs([(handle, node)]),
         }
     finally:
         connection.close()

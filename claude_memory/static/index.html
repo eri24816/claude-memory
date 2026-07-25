@@ -132,6 +132,10 @@
   }
   .graph-side h2 { margin: 0 0 0.65rem; font-size: 0.92rem; }
   .graph-summary { font-size: 0.84rem; overflow-wrap: anywhere; }
+  tr.expandable { cursor: pointer; }
+  tr.expandable:hover { background: #1b1d22; }
+  .detail { padding: 0.35rem 0 0.55rem; color: #b9bec7; font-size: 0.86rem;
+            line-height: 1.5; overflow-wrap: anywhere; }
   .legend { display: flex; flex-wrap: wrap; gap: 0.45rem 0.8rem; margin-bottom: 0.8rem; }
   .legend-item { display: inline-flex; align-items: center; gap: 0.35rem; font-size: 0.72rem; color: var(--ink-soft); }
   .legend-dot { width: 0.65rem; height: 0.65rem; border-radius: 50%; }
@@ -178,7 +182,7 @@
     </div>
     <div class="scroll"><table>
       <thead><tr>
-        <th>Type</th><th>Summary</th><th>Scope</th><th>About</th>
+        <th>Type</th><th>Claim</th><th>Scope</th><th>About</th>
         <th>Window</th><th>State</th>
       </tr></thead>
       <tbody id="nodes-body"></tbody>
@@ -214,7 +218,7 @@
     <pre class="block" id="auto-block"></pre>
     <h2 class="blockhead">Ranking detail</h2>
     <div class="scroll"><table>
-      <thead><tr><th>Score</th><th>BM25</th><th>Vector</th><th>Type</th><th>Summary</th></tr></thead>
+      <thead><tr><th>Score</th><th>BM25</th><th>Vector</th><th>Type</th><th>Claim</th></tr></thead>
       <tbody id="auto-body"></tbody>
     </table></div>
   </section>
@@ -234,7 +238,7 @@
     <pre class="block" id="q-block"></pre>
     <h2 class="blockhead">Ranking detail</h2>
     <div class="scroll"><table>
-      <thead><tr><th>Score</th><th>BM25</th><th>Vector</th><th>Type</th><th>Summary</th></tr></thead>
+      <thead><tr><th>Score</th><th>BM25</th><th>Vector</th><th>Type</th><th>Claim</th></tr></thead>
       <tbody id="q-body"></tbody>
     </table></div>
   </section>
@@ -302,8 +306,17 @@ function hitRows(hits) {
       <td class="num ${hit.lexical_rank ? "" : "muted"}">${hit.lexical_rank ?? "–"}</td>
       <td class="num ${hit.semantic_rank ? "" : "muted"}">${hit.semantic_rank ?? "–"}</td>
       <td><span class="chip ${esc(hit.type)}">${esc(hit.type)}</span></td>
-      <td>${esc(hit.summary)}</td>
+      <td>${claimCell(hit)}</td>
     </tr>`).join("");
+}
+
+// A claim is eight words at most, so it is never truncated -- but a node with
+// detail is only a pointer at this width. The marker is the same `+` the
+// rendered block uses, so what is on screen matches what a session sees.
+function claimCell(node) {
+  const marker = node.detail
+    ? ` <span class="muted" title="${esc(node.detail)}">+</span>` : "";
+  return `${esc(node.claim ?? "")}${marker}`;
 }
 
 async function loadStats() {
@@ -336,14 +349,27 @@ async function loadNodes() {
     about_user: $("f-about").value, state: $("f-state").value, q: $("f-q").value,
   });
   $("nodes-body").innerHTML = rows.length ? rows.map((node) => `
-    <tr>
+    <tr class="${node.detail ? "expandable" : ""}"${node.detail ? ` data-id="${esc(node.id)}"` : ""}>
       <td><span class="chip ${esc(node.type)}">${esc(node.type)}</span></td>
-      <td>${esc(node.summary)}</td>
+      <td>${claimCell(node)}</td>
       <td class="num muted">${esc(node.scope)}</td>
       <td class="num">${node.about_user === null ? "<span class='muted'>–</span>" : (node.about_user ? "yes" : "<span class='muted'>no</span>")}</td>
       <td class="num muted">${esc(windowText(node))}</td>
       <td class="num">${stateText(node)}</td>
-    </tr>`).join("") : `<tr><td colspan="6" class="empty">No nodes match these filters.</td></tr>`;
+    </tr>
+    ${node.detail ? `<tr class="detail-row" data-for="${esc(node.id)}" hidden>
+      <td colspan="6"><div class="detail">${esc(node.detail)}</div></td>
+    </tr>` : ""}`).join("") : `<tr><td colspan="6" class="empty">No nodes match these filters.</td></tr>`;
+
+  // Detail lives behind a click for the same reason `dig` exists: the list is
+  // for scanning, and a store where every row is a paragraph is the thing the
+  // claim/detail split was introduced to stop.
+  $("nodes-body").querySelectorAll("tr.expandable").forEach((row) => {
+    row.addEventListener("click", () => {
+      const detail = $("nodes-body").querySelector(`tr[data-for="${row.dataset.id}"]`);
+      if (detail) detail.hidden = !detail.hidden;
+    });
+  });
 }
 
 async function loadT1() {
@@ -414,11 +440,11 @@ function renderGraph() {
   const points = visible.map((point) => {
     const x = padding + ((point.x - xMin) / spanX) * (width - padding * 2);
     const y = padding + ((point.y - yMin) / spanY) * (height - padding * 2);
-    const matches = !query || `${point.title || ""} ${point.summary}`.toLowerCase().includes(query);
+    const matches = !query || `${point.claim} ${point.detail || ""}`.toLowerCase().includes(query);
     return `<circle class="graph-point ${point.about_user ? "personal" : "world"}"
       data-id="${esc(point.id)}" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}"
       r="${point.about_user ? 7 : 5}" fill="${graphColors[point.type] || "#8b95a1"}"
-      opacity="${matches ? 0.92 : 0.12}"><title>${esc(point.title || point.summary)}</title></circle>`;
+      opacity="${matches ? 0.92 : 0.12}"><title>${esc(point.claim)}</title></circle>`;
   }).join("");
   svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
   svg.innerHTML = `<g transform="translate(${graphTransform.x} ${graphTransform.y}) scale(${graphTransform.scale})">${points}</g>`;
@@ -430,7 +456,9 @@ function renderGraph() {
     $("graph-detail").classList.remove("muted");
     $("graph-detail").innerHTML = `<span class="chip ${esc(point.type)}">${esc(point.type)}</span>
       ${point.about_user ? `<span class="flag">personal</span>` : `<span class="muted">world</span>`}
-      <p>${esc(point.summary)}</p><div class="num muted">${esc(point.scope)} · ${esc(point.id)}</div>`;
+      <p>${esc(point.claim)}</p>
+      ${point.detail ? `<div class="detail">${esc(point.detail)}</div>` : ""}
+      <div class="num muted">${esc(point.scope)} · ${esc(point.id)}</div>`;
   }));
   $("graph-meta").textContent = `${visible.length} / ${graphData.points.length} nodes · ${graphData.algorithm} from ${graphData.dimensions}D`;
 }
