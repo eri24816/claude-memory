@@ -285,8 +285,19 @@ producing a duplicate an append-only store can never merge.
 Supersession no longer moves anything. The id never changes, so a supersession is an
 insert plus a pointer.
 
-Retrieved hits render as one bare row each — `type, date, claim`, under a single
-`# memory that could be useful:` heading. Nothing else, and **nothing truncated**: v0
+Every listing uses one row format — `claim|when|+|-> correction` — because T1, search,
+the per-message block and dig's session block are all read by the same reader, and four
+dialects meant learning the punctuation four times. Each field after the claim answers a
+question that would otherwise cost a dig: is there more (`+`), when was it true (`when`),
+and has something replaced it (`->`, naming the claim that currently stands, not the
+immediate successor). Trailing empty fields are dropped; interior ones are kept, so a
+field's position never depends on whether an earlier one was filled. Dates drop the
+century and, within the current year, the year: `07-17`, against `27-07-31` for one
+outside it, which reads as visibly not-this-year rather than silently wrong every
+January.
+
+Retrieved hits carry a single `# memory that could be useful:` heading and
+**nothing truncated**: v0
 clipped content at 400 characters and had to instruct the agent to dig "whenever a
 truncated row looks like it matters", which made dig repair work for a renderer that
 could not tell the whole truth. A claim is complete by construction, so a row is either

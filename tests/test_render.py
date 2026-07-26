@@ -57,16 +57,52 @@ def test_editorial_comments_do_not_reach_context(connection):
     assert "TODO" not in block
 
 
-def test_context_rows_are_type_date_claim(connection):
+def test_context_rows_use_the_standard_row_format(connection):
+    """claim|window|detail|-> correction, the same shape T1 and dig use."""
     hits = retrieval.search(connection, "apartment Leslie", limit=1,
                             exclude_ids=None)
     block = retrieval.render_context(hits)
 
     assert block.startswith("# memory that could be useful:")
-    kind, date, claim = (part.strip() for part in block.splitlines()[1].split(",", 2))
-    assert kind == "fact"
-    assert date == "2026-07-17..2027-07-31"
-    assert claim.startswith("Eric's apartment is 2442 Leslie Circle")
+    claim, window, detail = block.splitlines()[1].split("|")
+    assert claim == "Eric's apartment is 2442 Leslie Circle"
+    # 2026 is the fixture's current year; 2027 is not, so it keeps two digits.
+    assert window == "07-17..27-07-31"
+    assert detail == "+"
+
+
+def test_a_row_drops_trailing_empty_fields_but_not_interior_ones(connection):
+    """Field position must not depend on whether an earlier field was filled."""
+    dated_no_detail = retrieval.render_row(
+        {"claim": "A claim", "window_start": "2026-07-17", "window_end": None}
+    )
+    assert dated_no_detail == "A claim|07-17"
+
+    undated_with_detail = retrieval.render_row(
+        {"claim": "A claim", "detail": "something"}
+    )
+    assert undated_with_detail == "A claim||+"
+
+
+def test_a_row_points_at_the_newest_correction(connection):
+    """Not the immediate successor: a correction that was itself corrected sends
+    the reader one hop short of what is true."""
+    store.remember(connection, [{
+        "op": "supersede", "supersedes": "eric-moves-in-and-collects-keys",
+        "claim": "Eric moved in on the fifth", "type": "action",
+        "about_user": True, "window_start": "2026-08-05",
+    }])
+    store.remember(connection, [{
+        "op": "supersede", "supersedes": "eric-moved-in-on-the-fifth",
+        "claim": "Eric moved in a day late", "type": "action",
+        "about_user": True, "window_start": "2026-08-06",
+    }])
+
+    hits = retrieval.search(connection, "moves in collects keys", limit=5,
+                            include_superseded=True, exclude_ids=None)
+    original = next(h for h in hits if h["id"] == "eric-moves-in-and-collects-keys")
+
+    assert retrieval.render_row(original).endswith("-> Eric moved in a day late")
 
 
 def test_rows_are_never_truncated(connection):
@@ -94,7 +130,7 @@ def test_detail_is_marked_but_not_rendered(connection):
 def test_claimless_nodes_carry_no_marker(connection):
     node = retrieval.dig(connection, "Eric moves in and collects keys")
     assert node["detail"] is None
-    assert not retrieval.render_hit(node).endswith("+")
+    assert not retrieval.render_row(node).endswith("+")
 
 
 def test_context_carries_no_standing_instructions(connection):
@@ -228,7 +264,7 @@ def test_a_node_at_the_end_truncates_only_the_head(connection):
     block = retrieval.render_dig(retrieval.dig(connection, "Session note number 5"))
 
     assert "session wrote 6 nodes; this is #6:" in block
-    assert block.rstrip().endswith("->Session note number 5")
+    assert block.rstrip().splitlines()[-1].startswith("->Session note number 5")
 
 
 def test_dig_misses_report_the_handle(connection):

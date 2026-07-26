@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import re
 import sqlite3
 from typing import Any
@@ -141,7 +142,7 @@ def search(
         ),
         ranked AS (
             SELECT n.id, n.claim, n.detail, n.type, n.scope, n.about_user,
-                   n.window_start, n.window_end, n.stale,
+                   n.window_start, n.window_end, n.stale, n.superseded_by,
                    lexical.rank  AS lexical_rank,
                    semantic.rank AS semantic_rank,
                    COALESCE(1.0 / (? + lexical.rank), 0)
@@ -168,7 +169,7 @@ def search(
               {type_clause}
         )
         SELECT id, claim, detail, type, scope, about_user,
-               window_start, window_end, stale,
+               window_start, window_end, stale, superseded_by,
                lexical_rank, semantic_rank, score
         FROM ranked
         WHERE source_position <= ?
@@ -194,7 +195,15 @@ def search(
          *scopes, *parent_params, *exclude_params, *type_params,
          max_per_source, effective_raw_limit, limit),
     ).fetchall()
-    return [dict(row) for row in rows]
+
+    hits = []
+    for row in rows:
+        hit = dict(row)
+        # Costs a query only when a superseded node was asked for: the default
+        # search excludes them, so this loop is a no-op on the common path.
+        hit["correction"] = newest_correction(connection, hit["superseded_by"])
+        hits.append(hit)
+    return hits
 
 
 def t1_ids(connection: sqlite3.Connection, scope: str | None = None) -> set[str]:
@@ -230,14 +239,17 @@ def search_stratified(
     return sorted([*personal, *world], key=lambda hit: hit["score"], reverse=True)
 
 
-# Appended to a rendered claim whose node carries detail. Without it, digging is
-# a gamble: an 8-word claim reads as the whole node, so an agent would act on the
-# summary of a node whose entire value sits in the detail it never saw. One
-# character turns that into an informed choice.
-DETAIL_MARKER = " +"
+# Marks a node that carries detail. Without it, digging is a gamble: an 8-word
+# claim reads as the whole node, so an agent would act on the summary of a node
+# whose entire value sits in the detail it never saw. One character turns that
+# into an informed choice.
+DETAIL_MARKER = "+"
+
+ROW_SEPARATOR = "|"
 
 
 def _date_field(node: dict[str, Any]) -> str:
+    """The long window form, for `dig`, which is read one node at a time."""
     start, end = node.get("window_start"), node.get("window_end")
     if not start and not end:
         return "-"
@@ -246,16 +258,90 @@ def _date_field(node: dict[str, Any]) -> str:
     return f"{start}.." if start else f"..{end}"
 
 
-def render_hit(node: dict[str, Any]) -> str:
-    """One node as one line: type, window, claim, and whether detail exists."""
-    marker = DETAIL_MARKER if node.get("detail") else ""
-    return f"{node['type']}, {_date_field(node)}, {node['claim']}{marker}"
+def short_date(value: str, today: dt.date | None = None) -> str:
+    """`mm-dd` inside the current year, `yy-mm-dd` outside it.
+
+    The century is never in question and the current year is the overwhelming
+    common case, so spending four characters on "2026-" buys nothing. Dropping
+    the year entirely would be worse than useless -- a date that silently means
+    a different year every January -- so a year that is *not* the current one
+    keeps two digits of it, and reads as visibly not-this-year.
+    """
+    today = today or dt.date.today()
+    year, month, day = value.split("-")
+    if year == f"{today.year}":
+        return f"{month}-{day}"
+    return f"{year[2:]}-{month}-{day}"
+
+
+def _row_window(node: dict[str, Any]) -> str:
+    start, end = node.get("window_start"), node.get("window_end")
+    if not start and not end:
+        return ""
+    if start and end:
+        return (
+            short_date(start) if start == end
+            else f"{short_date(start)}..{short_date(end)}"
+        )
+    return short_date(start) if start else f"..{short_date(end)}"
+
+
+def render_row(node: dict[str, Any]) -> str:
+    """One node as one line, the same everywhere a claim is listed.
+
+        <claim>|<window>|<detail mark>|-> <newest correction>
+
+    One format for T1, search, the per-message hook and dig's session block, so
+    an agent learns to read a row once. Every field after the claim is a
+    decision aid rather than content: whether there is more to fetch, when it
+    was true, and whether something has since replaced it -- the three questions
+    that otherwise need a dig to answer.
+
+    Trailing empty fields are dropped. Interior ones are kept, so the position
+    of a field never depends on whether an earlier one was populated; keeping
+    the trailing ones too would tax every T1 row for nodes that have neither
+    detail nor a correction, which is most of them.
+    """
+    fields = [
+        node["claim"],
+        _row_window(node),
+        DETAIL_MARKER if node.get("detail") else "",
+        f"-> {node['correction']}" if node.get("correction") else "",
+    ]
+    while len(fields) > 1 and not fields[-1]:
+        fields.pop()
+    return ROW_SEPARATOR.join(fields)
+
+
+def newest_correction(
+    connection: sqlite3.Connection, superseded_by: str | None
+) -> str | None:
+    """Follow the supersession chain to the claim that currently stands.
+
+    The immediate successor may itself have been superseded, and a row pointing
+    at a correction that was later corrected sends the reader one hop short of
+    what is true. Cycles cannot be written -- a node may not supersede itself --
+    but the guard is cheap and a malformed store should not hang a render.
+    """
+    seen: set[str] = set()
+    claim: str | None = None
+    current = superseded_by
+    while current and current not in seen:
+        seen.add(current)
+        row = connection.execute(
+            "SELECT claim, superseded_by FROM nodes WHERE id = ?", (current,)
+        ).fetchone()
+        if row is None:
+            break
+        claim = row["claim"]
+        current = row["superseded_by"]
+    return claim
 
 
 def render_context(
     hits: list[dict[str, Any]], heading: str = "# memory that could be useful:"
 ) -> str:
-    """Render hits as one comma-delimited row each: type, date, claim.
+    """Render hits in the standard row format.
 
     Nothing is truncated any more, and that is the point. v0 clipped a 684-char
     summary at 400 and had to instruct the agent to dig "whenever a truncated row
@@ -268,7 +354,7 @@ def render_context(
     """
     if not hits:
         return ""
-    return "\n".join([heading, *(render_hit(hit) for hit in hits)])
+    return "\n".join([heading, *(render_row(hit) for hit in hits)])
 
 
 DIG_FIELDS = (
@@ -304,7 +390,8 @@ def _session_neighbourhood(
         return None
 
     rows = connection.execute(
-        "SELECT id, claim, type FROM nodes WHERE source_session = ? ORDER BY rowid",
+        "SELECT id, claim, type, detail, superseded_by, window_start, window_end "
+        "FROM nodes WHERE source_session = ? ORDER BY rowid",
         (session_id,),
     ).fetchall()
     identifiers = [row["id"] for row in rows]
@@ -323,6 +410,11 @@ def _session_neighbourhood(
         "after_truncated": end < len(rows),
         "nodes": [
             {"id": row["id"], "claim": row["claim"], "type": row["type"],
+             "detail": row["detail"],
+             "window_start": row["window_start"], "window_end": row["window_end"],
+             # The session block is the one listing that shows superseded nodes,
+             # so it is the one place the correction pointer earns its keep.
+             "correction": newest_correction(connection, row["superseded_by"]),
              "current": row["id"] == node_id}
             for row in rows[start:end]
         ],
@@ -437,7 +529,7 @@ def render_session_neighbourhood(neighbourhood: dict[str, Any] | None) -> list[s
         lines.append("  ...")
     for sibling in neighbourhood["nodes"]:
         marker = "->" if sibling["current"] else "  "
-        lines.append(f"{marker}{sibling['claim']}")
+        lines.append(f"{marker}{render_row(sibling)}")
     if neighbourhood["after_truncated"]:
         lines.append("  ...")
     return lines
@@ -582,11 +674,7 @@ def render_t1(nodes: list[dict[str, Any]]) -> str:
     for node_type in sorted(by_type):
         lines = [f"## {node_type}"]
         for node in by_type[node_type]:
-            window = ""
-            if node.get("window_start") or node.get("window_end"):
-                window = f" [{node.get('window_start') or ''}..{node.get('window_end') or ''}]"
-            marker = DETAIL_MARKER if node.get("detail") else ""
-            lines.append(f"- {node['claim']}{marker}{window}")
+            lines.append(f"- {render_row(node)}")
         sections.append("\n".join(lines))
 
     if not sections:

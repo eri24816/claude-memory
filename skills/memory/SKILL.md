@@ -37,7 +37,7 @@ python -m claude_memory remember --file nodes.json
 
 | Field | Notes |
 |---|---|
-| `claim` | **Required. Eight words maximum**, enforced. The whole node as far as anything that reads memory is concerned — it is what T1 and search render, and nothing truncates it. Compress by deleting function words, not by cutting the end. **No dates**: the window renders itself as `[2026-07-17..]`, so a date in the claim wastes a word and drifts from the field. |
+| `claim` | **Required. Eight words maximum**, enforced. The whole node as far as anything that reads memory is concerned — it is what T1 and search render, and nothing truncates it. Compress by deleting function words, not by cutting the end. **No dates**: the window renders itself in the row, so a date in the claim wastes a word and drifts from the field. |
 | `detail` | Optional, and **usually absent**. Everything that did not fit. Returned only by `dig`. Write it for a verification trail, a gotcha, or a correction — not to preserve a paragraph you did not want to compress. |
 | `about_user` | **Required for `fact`/`action`/`todo`/`intention`.** Is this inside Eric's personal sphere? Not grammatical subject — *"my roommate moved in"* is `true`, *"Fizz rebranded"* is `false`. Gates the autoload set, so get it right. |
 | `window_start` / `window_end` | ISO dates. **Convert relative to absolute** — "next August" → `2026-08-01`. Null end = unknown, not "forever". |
@@ -64,9 +64,22 @@ everything else goes, or moves to `detail`.
 | "After arriving in Ann Arbor, Eric will apply for a Discovery credit card on 2026-08-06" | `Eric will apply for Discovery card` |
 | "The schtasks command fails with access denied when creating an ONLOGON trigger" | `schtasks ONLOGON trigger requires elevation` |
 
-A claim followed by `+` in rendered output means the node carries detail. If you
-are about to act on such a row, dig it first — the eight words are a pointer, not
-the node.
+### The row format
+
+Everything that lists nodes — T1, search, the per-message block, dig's session
+block — renders each one the same way:
+
+```
+claim|when|+|-> the claim that replaced it
+```
+
+`when` is the window: `mm-dd` inside the current year, `yy-mm-dd` outside it, and
+`start..end` when the two differ. `+` means the node carries detail the row does
+not show — dig before acting on such a row, because the eight words are a pointer
+and not the node. `-> …` means this claim has been superseded, and names the claim
+that currently stands rather than the immediate successor, which may itself have
+been corrected. Trailing empty fields are dropped, interior ones are not, so
+`A claim||+` is a node with detail and no window.
 
 ### One node, one statement
 

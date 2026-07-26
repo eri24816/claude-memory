@@ -16,8 +16,11 @@ READING. Whenever you notice context is missing, search before asking the user t
 repeat themselves. `python -m claude_memory search "<query>" "<another angle>"`
 prints one row per hit; `python -m claude_memory dig <id-or-claim>` returns a node
 in full. Both take several arguments in one call and should be used that way. A
-claim is eight words at most, so a row ending in `+` is a pointer, not the node —
-dig it before acting on it.
+Every listing — T1, search, per-message — renders one row per node as
+`claim|when|+|-> correction`, trailing empty fields dropped. A `+` means the node
+carries detail the row does not show, so the row is a pointer and not the node:
+dig it before acting on it. A `->` means something has since replaced this claim,
+and the claim named after it is the one that currently stands.
 
 WRITING. Be an active memorizer, not a passive one: capture as a normal part of
 finishing a task, unasked, at the moment it happens rather than batched for later.
