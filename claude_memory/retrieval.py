@@ -248,16 +248,6 @@ DETAIL_MARKER = "+"
 ROW_SEPARATOR = "|"
 
 
-def _date_field(node: dict[str, Any]) -> str:
-    """The long window form, for `dig`, which is read one node at a time."""
-    start, end = node.get("window_start"), node.get("window_end")
-    if not start and not end:
-        return "-"
-    if start and end:
-        return start if start == end else f"{start}..{end}"
-    return f"{start}.." if start else f"..{end}"
-
-
 def short_date(value: str, today: dt.date | None = None) -> str:
     """`mm-dd` inside the current year, `yy-mm-dd` outside it.
 
@@ -421,6 +411,36 @@ def _session_neighbourhood(
     }
 
 
+def reference(
+    connection: sqlite3.Connection, node_id: str | None
+) -> dict[str, Any] | None:
+    """A node named by another node, carrying what the row format needs.
+
+    Every reference a dig prints -- the successor, the parent, what this
+    supersedes, what it links to -- is another node, and a bare claim tells the
+    reader nothing about whether it is worth following. As a row it says whether
+    there is detail behind it and whether it has itself been replaced, which is
+    the difference between one dig and three.
+    """
+    if not node_id:
+        return None
+    row = connection.execute(
+        "SELECT id, claim, detail, window_start, window_end, superseded_by "
+        "FROM nodes WHERE id = ?",
+        (node_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    return {
+        "id": row["id"],
+        "claim": row["claim"],
+        "detail": row["detail"],
+        "window_start": row["window_start"],
+        "window_end": row["window_end"],
+        "correction": newest_correction(connection, row["superseded_by"]),
+    }
+
+
 def dig(connection: sqlite3.Connection, handle: str) -> dict[str, Any] | None:
     """Expand one node by id, exact claim, or unambiguous claim fragment.
 
@@ -450,31 +470,21 @@ def dig(connection: sqlite3.Connection, handle: str) -> dict[str, Any] | None:
     if row is None:
         return None
 
-    def claim_of(other_id: str | None) -> str | None:
-        if not other_id:
-            return None
-        found = connection.execute(
-            "SELECT claim FROM nodes WHERE id = ?", (other_id,)
-        ).fetchone()
-        return found["claim"] if found else None
-
     node = {field: row[field] for field in DIG_FIELDS}
     node["id"] = row["id"]
     node["about_user"] = None if row["about_user"] is None else bool(row["about_user"])
     node["stale"] = bool(row["stale"])
-    node["superseded_by"] = claim_of(row["superseded_by"])
-    node["parent"] = claim_of(row["parent"])
+    node["superseded_by"] = reference(connection, row["superseded_by"])
+    node["parent"] = reference(connection, row["parent"])
     node["supersedes"] = [
-        found["claim"] for found in connection.execute(
-            "SELECT claim FROM nodes WHERE superseded_by = ?", (row["id"],)
+        reference(connection, found["id"]) for found in connection.execute(
+            "SELECT id FROM nodes WHERE superseded_by = ?", (row["id"],)
         )
     ]
     node["edges"] = [
-        {"rel": edge["rel"], "to": edge["claim"]}
+        {"rel": edge["rel"], "to": reference(connection, edge["dst_id"])}
         for edge in connection.execute(
-            "SELECT e.rel, n.claim FROM node_edges AS e "
-            "JOIN nodes AS n ON n.id = e.dst_id WHERE e.src_id = ?",
-            (row["id"],),
+            "SELECT rel, dst_id FROM node_edges WHERE src_id = ?", (row["id"],)
         )
     ]
     node["session_nodes"] = _session_neighbourhood(
@@ -495,18 +505,22 @@ def render_dig(node: dict[str, Any] | None, handle: str = "") -> str:
         if node[field] is not None:
             lines.append(f"{field}: {node[field]}")
     if node["window_start"] or node["window_end"]:
-        lines.append(f"time: {_date_field(node)}")
+        lines.append(f"time: {_row_window(node)}")
     if node["locator"]:
         lines.append(f"source: {node['locator']}")
     if node["source_session"]:
         lines.append(f"session: {node['source_session']}")
+    # Every reference is a row, one per line: rows carry `|`, so comma-joining
+    # several of them onto one line would leave the reader parsing punctuation
+    # to find where one node ends and the next begins.
     for field in ("superseded_by", "parent"):
         if node[field]:
-            lines.append(f"{field}: {node[field]}")
-    if node["supersedes"]:
-        lines.append(f"supersedes: {', '.join(node['supersedes'])}")
+            lines.append(f"{field}: {render_row(node[field])}")
+    for superseded in node["supersedes"]:
+        lines.append(f"supersedes: {render_row(superseded)}")
     for edge in node["edges"]:
-        lines.append(f"{edge['rel']}: {edge['to']}")
+        if edge["to"]:
+            lines.append(f"{edge['rel']}: {render_row(edge['to'])}")
     if node["detail"]:
         lines.extend(["", node["detail"]])
     lines.extend(render_session_neighbourhood(node.get("session_nodes")))

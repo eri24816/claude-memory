@@ -178,11 +178,37 @@ def test_supersession_keeps_the_id_stable(connection):
          "about_user": True, "window_start": "2027-08-01"},
     ])
     old = retrieval.dig(connection, "eric-s-apartment-is-2442-leslie-circle")
-    assert old["superseded_by"] == "Eric renewed the Leslie Circle lease"
+    assert old["superseded_by"]["claim"] == "Eric renewed the Leslie Circle lease"
 
     new = retrieval.dig(connection, "Eric renewed the Leslie Circle lease")
     assert new["stale"] is False
-    assert new["supersedes"] == ["Eric's apartment is 2442 Leslie Circle"]
+    assert [n["claim"] for n in new["supersedes"]] == [
+        "Eric's apartment is 2442 Leslie Circle"
+    ]
+
+
+def test_dig_renders_every_reference_as_a_row(connection):
+    """A bare claim says nothing about whether following it is worth a dig."""
+    store.remember(connection, [
+        {"op": "supersede", "supersedes": "eric-s-apartment-is-2442-leslie-circle",
+         "claim": "Eric renewed the Leslie Circle lease", "type": "fact",
+         "about_user": True, "window_start": "2027-08-01"},
+    ])
+    block = retrieval.render_dig(
+        retrieval.dig(connection, "Eric renewed the Leslie Circle lease")
+    )
+
+    # The superseded node carries detail, so its row has to say so.
+    assert "supersedes: Eric's apartment is 2442 Leslie Circle|07-17..27-07-31|+" in block
+
+
+def test_dig_shortens_its_own_time_field(connection):
+    """One date rule everywhere, including the field dig prints for itself."""
+    block = retrieval.render_dig(
+        retrieval.dig(connection, "Eric moves in and collects keys")
+    )
+    assert "time: 08-05" in block
+    assert "2026-08-05" not in block
 
 
 def test_write_operations_accept_claims(connection):
@@ -204,7 +230,7 @@ def test_dig_renders_the_id_it_resolved(connection):
     assert block.startswith("# Eric moves in and collects keys")
     assert "id: eric-moves-in-and-collects-keys" in block
     assert "type: todo" in block
-    assert "time: 2026-08-05" in block
+    assert "time: 08-05" in block
 
 
 def test_digs_batch_into_one_result(connection):
