@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.3.0 — 2026-07-26
+
+- One row format everywhere — `claim|when|+|-> correction`. T1, search, the
+  per-message block and dig all used to render a node their own way. Dates drop
+  the century, and the year inside the current one: `07-17`, `27-07-31`.
+- `dig` ends with the session's other nodes in the order they were written,
+  three each side of the one dug, so an agent can walk sideways to the context a
+  node was written in. Every reference it prints is a row rather than a claim.
+- Retrieval no longer subtracts the autoloaded set. The nodes T1 preloads are
+  the ones most likely to answer a question about the user, so excluding them
+  meant a search for what the store knows best returned everything except it.
+- `RAW_PER_QUERY` is 5, up from 2.
+- The inspector's Nodes tab opens the dig instead of the detail field, and its
+  table shares the same date rule and names what superseded a row.
+
 ## 0.2.1 — 2026-07-26
 
 - The refinement mechanism is removed. `ingest` no longer carries supersession

@@ -103,8 +103,6 @@ def main(argv: list[str] | None = None) -> int:
                                help="restrict to one node type, e.g. code-pref")
     search_parser.add_argument("--json", action="store_true",
                                help="raw rows with ranks, instead of the rendered block")
-    search_parser.add_argument("--include-autoloaded", action="store_true",
-                               help="do not filter out what T1 already loaded")
 
     dig_parser = subparsers.add_parser(
         "dig", help="expand nodes by id or claim; several handles in one call"
@@ -182,15 +180,10 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "search":
             # The rendered block is the default: it is what an agent should read,
             # and the ranks only matter when debugging retrieval itself.
-            excluded = (
-                None if args.include_autoloaded
-                else retrieval.t1_ids(connection, scope=args.scope)
-            )
             results = [
                 (query, retrieval.search(
                     connection, query, limit=args.limit,
                     scope=args.scope, parent=args.parent, node_type=args.node_type,
-                    exclude_ids=excluded,
                 ))
                 for query in args.query
             ]

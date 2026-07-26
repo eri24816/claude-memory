@@ -105,10 +105,7 @@ def build_user_prompt_context(payload: dict, connection: sqlite3.Connection) -> 
         return ""
 
     scope = scope_for_cwd(payload.get("cwd") or os.getcwd())
-    hits = retrieval.search_stratified(
-        connection, prompt, scope=scope,
-        exclude_ids=retrieval.t1_ids(connection, scope=scope),
-    )
+    hits = retrieval.search_stratified(connection, prompt, scope=scope)
     return retrieval.render_context(hits)
 
 

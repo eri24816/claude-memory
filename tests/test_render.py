@@ -59,8 +59,7 @@ def test_editorial_comments_do_not_reach_context(connection):
 
 def test_context_rows_use_the_standard_row_format(connection):
     """claim|window|detail|-> correction, the same shape T1 and dig use."""
-    hits = retrieval.search(connection, "apartment Leslie", limit=1,
-                            exclude_ids=None)
+    hits = retrieval.search(connection, "apartment Leslie", limit=1)
     block = retrieval.render_context(hits)
 
     assert block.startswith("# memory that could be useful:")
@@ -99,7 +98,7 @@ def test_a_row_points_at_the_newest_correction(connection):
     }])
 
     hits = retrieval.search(connection, "moves in collects keys", limit=5,
-                            include_superseded=True, exclude_ids=None)
+                            include_superseded=True)
     original = next(h for h in hits if h["id"] == "eric-moves-in-and-collects-keys")
 
     assert retrieval.render_row(original).endswith("-> Eric moved in a day late")
@@ -109,15 +108,14 @@ def test_rows_are_never_truncated(connection):
     """v0 clipped a 684-character summary at 400 and had to instruct the agent to
     dig whenever a row 'looked like it mattered'. A claim is complete by
     construction, so dig stops being repair work for the renderer."""
-    hits = retrieval.search(connection, "apartment Leslie", exclude_ids=None)
+    hits = retrieval.search(connection, "apartment Leslie")
     assert "…" not in retrieval.render_context(hits)
 
 
 def test_detail_is_marked_but_not_rendered(connection):
     """An 8-word claim reads as the whole node. Without the marker an agent would
     act on the summary of a node whose entire value sits in unread detail."""
-    hits = retrieval.search(connection, "apartment Leslie", limit=1,
-                            exclude_ids=None)
+    hits = retrieval.search(connection, "apartment Leslie", limit=1)
     row = retrieval.render_context(hits).splitlines()[1]
 
     assert row.endswith("+")
@@ -137,7 +135,7 @@ def test_context_carries_no_standing_instructions(connection):
     """Guidance is a per-message tax when it is injected per message; the rules
     for reading these rows live once in meta.md."""
     block = retrieval.render_context(
-        retrieval.search(connection, "apartment", exclude_ids=None)
+        retrieval.search(connection, "apartment")
     )
     assert "supersede" not in block.lower()
     assert "dig" not in block.lower()

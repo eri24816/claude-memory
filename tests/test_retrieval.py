@@ -94,22 +94,19 @@ def test_stratified_guarantees_personal_slots(connection):
     assert any(hit["about_user"] for hit in stratified)
 
 
-def test_autoloaded_nodes_are_excluded_from_retrieval(connection):
-    """Retrieval spends a budget the autoload set has already spent. A node that
-    is verbatim in context costs a slot and reads as a second source agreeing."""
-    autoloaded = retrieval.t1_ids(connection)
+def test_autoloaded_nodes_are_retrievable(connection):
+    """Retrieval used to subtract the autoload set. It no longer does: a node
+    matching the query is the answer whether or not it is also in context, and
+    silently withholding the best hit because it was loaded earlier means a
+    search for something present returns everything except it."""
+    autoloaded = {node["id"] for node in retrieval.assemble_t1(connection)}
     assert autoloaded, "precondition: something is autoloaded"
 
-    query = "when do I move into the apartment"
-    assert any(hit["id"] in autoloaded for hit in retrieval.search(connection, query))
-
-    hits = retrieval.search(connection, query, exclude_ids=autoloaded)
-    assert not any(hit["id"] in autoloaded for hit in hits)
+    hits = retrieval.search(connection, "when do I move into the apartment")
+    assert any(hit["id"] in autoloaded for hit in hits)
 
 
-def test_exclusion_does_not_shrink_the_result_set(connection):
-    """Regression risk: filtering after LIMIT would let excluded rows consume
-    slots, silently returning fewer hits than asked for."""
+def test_a_search_returns_as_many_hits_as_asked_for(connection):
     filler = [
         {"claim": f"Apartment note number {index}",
          "detail": f"Note {index} about apartments and moving house.",
@@ -118,10 +115,7 @@ def test_exclusion_does_not_shrink_the_result_set(connection):
     ]
     store.remember(connection, filler)
 
-    excluded = retrieval.t1_ids(connection)
-    hits = retrieval.search(connection, "apartment moving", limit=5,
-                            exclude_ids=excluded)
-    assert len(hits) == 5
+    assert len(retrieval.search(connection, "apartment moving", limit=5)) == 5
 
 
 @pytest.mark.parametrize("message", ["ok", "yes", "do it", "no thanks"])

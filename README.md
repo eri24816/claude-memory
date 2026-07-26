@@ -97,19 +97,19 @@ refined, there was no counterpart for a raw hit to lose to, so 0.6 only made raw
 at the one job it did well.
 
 0.1.0 removed `raw` entirely. 0.2.0 brings it back under a **per-query cap**: at most
-`RAW_PER_QUERY` (2) raw hits in any mixed search, filtered in SQL before `LIMIT` so a
+`RAW_PER_QUERY` (5) raw hits in any mixed search, filtered in SQL before `LIMIT` so a
 capped-away chunk cannot consume a result slot.
 
 The cap succeeds where the demotion failed because it asks an answerable question. "Is
 this chunk worth less than a claim?" needs a refined counterpart to compare against, and
 there was never one; "how much of a single query may be chunks?" is answerable with
 nothing in the store but chunks. It is also indifferent to corpus size — 500 sections or
-50,000, the third one is out — and it does not weaken the hits it keeps: the best two
-arrive at full score, in the rank they earned.
+50,000, the sixth one is out — and it does not weaken the hits it keeps: the five that
+survive arrive at full score, in the rank they earned.
 
 Two limits now bound raw, and they are not the same limit. `MAX_PER_SOURCE` holds any one
 *document* to two hits, because sections of a page are near-identical in embedding space.
-`RAW_PER_QUERY` holds the whole *corpus* to two, which is what a wiki of a thousand pages
+`RAW_PER_QUERY` holds the whole *corpus* to five, which is what a wiki of a thousand pages
 needs and what per-source cannot do. An explicit `--type raw` opts out of the per-query
 cap: it exists to stop a mixed result set being swamped, and a search that asked for
 chunks and nothing else is not being swamped.
@@ -303,11 +303,14 @@ truncated row looks like it matters", which made dig repair work for a renderer 
 could not tell the whole truth. A claim is complete by construction, so a row is either
 the whole node or a claim plus `+`.
 
-**Both search paths exclude what T1 already loaded.** Retrieval competes for a budget the
-autoload set has already spent, and a node returned verbatim into context it is already in
-costs a slot twice over — worse, it reads as two independent sources agreeing when it is
-one source counted twice. The exclusion happens in SQL, before `LIMIT`, or the dropped
-rows would consume result slots and silently shrink the result set.
+**Retrieval returns autoloaded nodes like any other.** Until 0.3.0 both search paths
+subtracted the T1 set, on the reasoning that a node already verbatim in context costs a
+slot twice and reads as two sources agreeing when it is one counted twice. The cost of
+that turned out to be worse than the duplication: the nodes most likely to answer a
+question about the user are exactly the ones T1 preloads, so a search for something the
+store knows best returned everything except the best answer, and a `dig` on a claim the
+agent could see in its own context reported a hit while `search` for the same words did
+not. A duplicate row is cheap and obvious. A silently withheld one is neither.
 
 T1 **replaces the global `CLAUDE.md`**, which is retired (archived at
 `archive/global-CLAUDE.md.retired`). Its rules became nodes in v0 and files again in

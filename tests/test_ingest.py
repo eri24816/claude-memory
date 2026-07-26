@@ -36,9 +36,34 @@ Pinning a certificate rather than a public key breaks on every routine renewal,
 which is the usual way a pinned deployment takes itself offline.
 """
 
-# A second document, because MAX_PER_SOURCE already holds one page to two hits.
-# The per-query cap is what bounds the *corpus*, so a single-page fixture cannot
-# tell the two limits apart and would pass with the cap deleted.
+# More than one document, because MAX_PER_SOURCE already holds one page to two
+# hits: the per-query cap bounds the *corpus*, so a single-page fixture cannot
+# tell the two limits apart and would pass with the cap deleted. The count is
+# driven by RAW_PER_QUERY -- the corpus has to be able to exceed the cap, or the
+# test passes for the wrong reason.
+EXTRA_PAGES = {
+    "queues": """# Message queues
+
+A durable queue writes each message to disk before acknowledging it, so a broker
+restart replays whatever the consumer had not finished processing.
+
+## Redelivery
+
+At-least-once delivery means a consumer sees duplicates after a crash, so the
+handler has to be idempotent or the effect is applied twice.
+""",
+    "caching": """# Cache invalidation
+
+A cache keyed on content survives a deploy, while one keyed on a path serves the
+previous release to anyone whose browser still holds the old entry.
+
+## Heuristic freshness
+
+A response with no explicit lifetime gets one invented by the browser, which is
+how a stale shell outlives the server that produced it.
+""",
+}
+
 SECOND_PAGE = """# Handshake tracing
 
 Capturing a TLS handshake with a key log file lets a debugger decrypt the
@@ -68,6 +93,8 @@ def wiki(tmp_path):
     path.mkdir()
     (path / "tls.md").write_text(PAGE, encoding="utf-8")
     (path / "tracing.md").write_text(SECOND_PAGE, encoding="utf-8")
+    for name, text in EXTRA_PAGES.items():
+        (path / f"{name}.md").write_text(text, encoding="utf-8")
     return path
 
 
@@ -89,7 +116,7 @@ def test_sections_land_as_claim_and_detail(connection, wiki):
     for row in rows:
         assert row["type"] == "raw"
         assert row["about_user"] is None
-        assert row["claim"].split(" > ")[0] in {"tls", "tracing"}
+        assert row["claim"].split(" > ")[0] in {p.stem for p in wiki.glob("*.md")}
         assert row["detail"] and len(row["detail"]) > len(row["claim"])
 
 
@@ -207,7 +234,7 @@ def test_reingest_is_a_no_op_when_the_file_is_unchanged(connection, wiki):
     ingest.ingest_path(connection, wiki)
     again = ingest.ingest_path(connection, wiki)
 
-    assert again["files_skipped"] == again["files_seen"] == 2
+    assert again["files_skipped"] == again["files_seen"] > 0
     assert again["nodes_written"] == 0
 
 

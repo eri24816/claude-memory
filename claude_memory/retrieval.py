@@ -25,7 +25,7 @@ FINAL_K = 10
 # "is this chunk worth less than a claim?", which needs a refined counterpart to
 # be answerable at all. The cap answers "how much of one query may be chunks?",
 # which is answerable with nothing in the store but chunks.
-RAW_PER_QUERY = 2
+RAW_PER_QUERY = 5
 
 # Sections of one document are near-identical in embedding space, so a matching
 # page sweeps the top slots and buries every other source. Capping per source
@@ -78,7 +78,6 @@ def search(
     include_superseded: bool = False,
     parent: str | None = None,
     about_user: bool | None = None,
-    exclude_ids: set[str] | None = None,
     node_type: str | None = None,
     max_per_source: int = MAX_PER_SOURCE,
     raw_limit: int = RAW_PER_QUERY,
@@ -108,15 +107,6 @@ def search(
         about_clause = "AND n.about_user = 1"
     elif about_user is False:
         about_clause = "AND COALESCE(n.about_user, 0) = 0"
-
-    # Excluded in SQL rather than filtered afterwards: dropping rows after LIMIT
-    # would let already-loaded nodes consume result slots and silently shrink
-    # what comes back.
-    exclude_clause = ""
-    exclude_params: tuple[Any, ...] = ()
-    if exclude_ids:
-        exclude_params = tuple(exclude_ids)
-        exclude_clause = f"AND n.id NOT IN ({', '.join('?' * len(exclude_params))})"
 
     type_clause = ""
     type_params: tuple[Any, ...] = ()
@@ -165,7 +155,6 @@ def search(
               AND {parent_clause}
               {superseded_clause}
               {about_clause}
-              {exclude_clause}
               {type_clause}
         )
         SELECT id, claim, detail, type, scope, about_user,
@@ -192,7 +181,7 @@ def search(
         sql,
         (match_expression, CANDIDATE_K, query_vector, CANDIDATE_K,
          RRF_K, RRF_K, RRF_K, RRF_K, RRF_K, RRF_K,
-         *scopes, *parent_params, *exclude_params, *type_params,
+         *scopes, *parent_params, *type_params,
          max_per_source, effective_raw_limit, limit),
     ).fetchall()
 
@@ -206,23 +195,12 @@ def search(
     return hits
 
 
-def t1_ids(connection: sqlite3.Connection, scope: str | None = None) -> set[str]:
-    """Node ids already autoloaded, and so not worth retrieving again.
-
-    Retrieval competes for a budget the autoload set has already spent. Returning
-    a node that is verbatim in context costs slots and reads as corroboration —
-    two independent sources agreeing — when it is one source counted twice.
-    """
-    return {node["id"] for node in assemble_t1(connection, scope=scope)}
-
-
 def search_stratified(
     connection: sqlite3.Connection,
     query: str,
     personal_limit: int = 3,
     world_limit: int = 3,
     scope: str | None = None,
-    exclude_ids: set[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Retrieve personal and world nodes as separate populations.
 
@@ -233,9 +211,9 @@ def search_stratified(
     so they get guaranteed slots rather than competing on raw score.
     """
     personal = search(connection, query, limit=personal_limit, scope=scope,
-                      about_user=True, exclude_ids=exclude_ids)
+                      about_user=True)
     world = search(connection, query, limit=world_limit, scope=scope,
-                   about_user=False, exclude_ids=exclude_ids)
+                   about_user=False)
     return sorted([*personal, *world], key=lambda hit: hit["score"], reverse=True)
 
 

@@ -1,6 +1,6 @@
 [project]
 name = "claude-memory"
-version = "0.2.1"
+version = "0.3.0"
 description = "Tiered memory for Claude: autoloaded T1 plus hybrid BM25/vector retrieval"
 requires-python = ">=3.11"
 dependencies = [

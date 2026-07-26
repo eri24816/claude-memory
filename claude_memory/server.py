@@ -246,7 +246,6 @@ def search(
     try:
         hits = retrieval.search(
             connection, q, limit=limit, scope=scope, node_type=type,
-            exclude_ids=retrieval.t1_ids(connection, scope=scope),
         )
         return {
             "hits": hits,
@@ -289,10 +288,7 @@ def auto(message: str, scope: str | None = None) -> dict[str, Any]:
 
     connection = _connection()
     try:
-        hits = retrieval.search_stratified(
-            connection, message, scope=scope,
-            exclude_ids=retrieval.t1_ids(connection, scope=scope),
-        )
+        hits = retrieval.search_stratified(connection, message, scope=scope)
         return {
             "would_retrieve": True,
             "reason": "passed the content-word gate",
