@@ -293,13 +293,32 @@ let graphData = null;
 let graphTransform = { x: 0, y: 0, scale: 1 };
 let graphDragging = null;
 
+// Mirrors retrieval.short_date: the year is dropped inside the current one and
+// kept to two digits outside it. The page shows the same dates a session reads,
+// so a second date dialect here would mean checking which surface you are on
+// before you can tell what a row says.
+function shortDate(value) {
+  if (!value) return "";
+  const [year, month, day] = value.split("-");
+  return year === String(new Date().getFullYear())
+    ? `${month}-${day}`
+    : `${year.slice(2)}-${month}-${day}`;
+}
+
 function windowText(node) {
-  if (!node.window_start && !node.window_end) return "";
-  return `${node.window_start || ""} … ${node.window_end || ""}`;
+  const start = shortDate(node.window_start);
+  const end = shortDate(node.window_end);
+  if (!start && !end) return "";
+  if (start && end) return start === end ? start : `${start}..${end}`;
+  return start || `..${end}`;
 }
 
 function stateText(node) {
-  if (node.superseded_by) return `<span class="flag">superseded</span>`;
+  if (node.superseded_by) {
+    const correction = node.correction
+      ? ` <span class="muted">-> ${esc(node.correction)}</span>` : "";
+    return `<span class="flag">superseded</span>${correction}`;
+  }
   if (node.stale) return `<span class="flag">stale</span>`;
   return `<span class="muted">current</span>`;
 }

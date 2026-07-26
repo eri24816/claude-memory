@@ -168,7 +168,16 @@ def nodes(
             """,
             (*params, limit),
         ).fetchall()
-        return [dict(row) for row in rows]
+        nodes = []
+        for row in rows:
+            node = dict(row)
+            # "superseded" alone tells you a row is dead without telling you
+            # what is alive, which is the only reason to care that it died.
+            node["correction"] = retrieval.newest_correction(
+                connection, node["superseded_by"]
+            )
+            nodes.append(node)
+        return nodes
     finally:
         connection.close()
 
