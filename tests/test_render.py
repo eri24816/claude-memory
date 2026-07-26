@@ -183,6 +183,54 @@ def test_digs_batch_into_one_result(connection):
     assert "---" in block
 
 
+def _session_batch(connection, session, count):
+    store.remember(connection, [
+        {"claim": f"Session note number {index}", "type": "idea",
+         "source_session": session, "window_start": "2026-07-26"}
+        for index in range(count)
+    ])
+
+
+def test_dig_shows_the_session_s_other_nodes_in_order(connection):
+    """A node is one of a handful a session wrote; the others are its context,
+    and retrieval can only reach the one that matched the query."""
+    _session_batch(connection, "session-abc", 10)
+
+    block = retrieval.render_dig(retrieval.dig(connection, "Session note number 6"))
+
+    assert "session wrote 10 nodes; this is #7:" in block
+    assert "->Session note number 6" in block
+    # Three each side, in the order the session wrote them, ellipsis for the rest.
+    for index in (3, 4, 5, 7, 8, 9):
+        assert f"  Session note number {index}" in block
+    assert "Session note number 2" not in block
+    assert block.count("  ...") == 1        # only the head is truncated
+
+    # Sliced from the heading: the claim also appears in the dig's own title.
+    listing = block[block.index("session wrote"):]
+    assert listing.index("number 5") < listing.index("number 6") < listing.index("number 7")
+
+
+def test_the_session_block_is_absent_when_there_are_no_siblings(connection):
+    """One node alone in its session has no neighbourhood; the `session:` line
+    already says which session it was."""
+    _session_batch(connection, "session-solo", 1)
+
+    block = retrieval.render_dig(retrieval.dig(connection, "Session note number 0"))
+
+    assert "session: session-solo" in block
+    assert "session wrote" not in block
+
+
+def test_a_node_at_the_end_truncates_only_the_head(connection):
+    _session_batch(connection, "session-tail", 6)
+
+    block = retrieval.render_dig(retrieval.dig(connection, "Session note number 5"))
+
+    assert "session wrote 6 nodes; this is #6:" in block
+    assert block.rstrip().endswith("->Session note number 5")
+
+
 def test_dig_misses_report_the_handle(connection):
     assert retrieval.dig(connection, "No such memory") is None
     assert "No such memory" in retrieval.render_dig(None, "No such memory")

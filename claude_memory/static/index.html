@@ -136,6 +136,12 @@
   tr.expandable:hover { background: #1b1d22; }
   .detail { padding: 0.35rem 0 0.55rem; color: #b9bec7; font-size: 0.86rem;
             line-height: 1.5; overflow-wrap: anywhere; }
+  /* The literal text a session receives, so it is shown as text: monospace, and
+     wrapped rather than scrolled, since the arrow marking the current node in
+     the session block is at the left edge and a horizontal scroll would hide it. */
+  .dig { margin: 0; padding: 0.5rem 0 0.7rem; color: #b9bec7;
+         font-family: var(--mono); font-size: 0.78rem; line-height: 1.55;
+         white-space: pre-wrap; overflow-wrap: anywhere; }
   .legend { display: flex; flex-wrap: wrap; gap: 0.45rem 0.8rem; margin-bottom: 0.8rem; }
   .legend-item { display: inline-flex; align-items: center; gap: 0.35rem; font-size: 0.72rem; color: var(--ink-soft); }
   .legend-dot { width: 0.65rem; height: 0.65rem; border-radius: 50%; }
@@ -349,7 +355,7 @@ async function loadNodes() {
     about_user: $("f-about").value, state: $("f-state").value, q: $("f-q").value,
   });
   $("nodes-body").innerHTML = rows.length ? rows.map((node) => `
-    <tr class="${node.detail ? "expandable" : ""}"${node.detail ? ` data-id="${esc(node.id)}"` : ""}>
+    <tr class="expandable" data-id="${esc(node.id)}">
       <td><span class="chip ${esc(node.type)}">${esc(node.type)}</span></td>
       <td>${claimCell(node)}</td>
       <td class="num muted">${esc(node.scope)}</td>
@@ -357,17 +363,30 @@ async function loadNodes() {
       <td class="num muted">${esc(windowText(node))}</td>
       <td class="num">${stateText(node)}</td>
     </tr>
-    ${node.detail ? `<tr class="detail-row" data-for="${esc(node.id)}" hidden>
-      <td colspan="6"><div class="detail">${esc(node.detail)}</div></td>
-    </tr>` : ""}`).join("") : `<tr><td colspan="6" class="empty">No nodes match these filters.</td></tr>`;
+    <tr class="detail-row" data-for="${esc(node.id)}" hidden>
+      <td colspan="6"><pre class="dig">loading…</pre></td>
+    </tr>`).join("") : `<tr><td colspan="6" class="empty">No nodes match these filters.</td></tr>`;
 
-  // Detail lives behind a click for the same reason `dig` exists: the list is
-  // for scanning, and a store where every row is a paragraph is the thing the
-  // claim/detail split was introduced to stop.
+  // A click opens the dig, not the detail field. The point of this tab is to
+  // show what a session would actually get, and `dig` is that: detail plus the
+  // edges, the supersession chain, and the session's other nodes. Every row is
+  // expandable now, because a node with no detail still has all of those.
   $("nodes-body").querySelectorAll("tr.expandable").forEach((row) => {
-    row.addEventListener("click", () => {
-      const detail = $("nodes-body").querySelector(`tr[data-for="${row.dataset.id}"]`);
-      if (detail) detail.hidden = !detail.hidden;
+    row.addEventListener("click", async () => {
+      const panel = $("nodes-body").querySelector(`tr[data-for="${row.dataset.id}"]`);
+      if (!panel) return;
+      panel.hidden = !panel.hidden;
+      if (panel.hidden || panel.dataset.loaded) return;
+      // Fetched on open, once. Digging every visible row up front would run the
+      // whole page's worth of queries to show text nobody asked to see.
+      const block = panel.querySelector(".dig");
+      try {
+        const data = await get("/api/dig", { handle: row.dataset.id });
+        block.textContent = data.block || "No memory matching this id.";
+        panel.dataset.loaded = "1";
+      } catch (error) {
+        block.textContent = `Could not dig this node: ${error}`;
+      }
     });
   });
 }

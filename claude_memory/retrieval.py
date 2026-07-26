@@ -278,6 +278,57 @@ DIG_FIELDS = (
 )
 
 
+# How many siblings to show on each side of the dug node. Enough to see what the
+# session was doing around this node, few enough that a dig stays a dig.
+SESSION_RADIUS = 3
+
+
+def _session_neighbourhood(
+    connection: sqlite3.Connection,
+    node_id: str,
+    session_id: str | None,
+    radius: int = SESSION_RADIUS,
+) -> dict[str, Any] | None:
+    """The nodes this session wrote, in order, centred on this one.
+
+    A node is rarely the whole of what a session learned -- it is one of a
+    handful written in the same stretch of work, and the others are its context.
+    Retrieval can only surface what matches the query, so a node whose siblings
+    explain it is unreachable from the sibling that scored. This gives the agent
+    a way to walk sideways instead.
+
+    Ordered by rowid, which is insertion order: the sequence the session left
+    them in, not the sequence they were edited into.
+    """
+    if not session_id:
+        return None
+
+    rows = connection.execute(
+        "SELECT id, claim, type FROM nodes WHERE source_session = ? ORDER BY rowid",
+        (session_id,),
+    ).fetchall()
+    identifiers = [row["id"] for row in rows]
+    if node_id not in identifiers or len(rows) < 2:
+        # Alone in its session, so there is no neighbourhood to show -- the
+        # `session:` line already says which session it was.
+        return None
+
+    index = identifiers.index(node_id)
+    start = max(0, index - radius)
+    end = min(len(rows), index + radius + 1)
+    return {
+        "position": index + 1,
+        "total": len(rows),
+        "before_truncated": start > 0,
+        "after_truncated": end < len(rows),
+        "nodes": [
+            {"id": row["id"], "claim": row["claim"], "type": row["type"],
+             "current": row["id"] == node_id}
+            for row in rows[start:end]
+        ],
+    }
+
+
 def dig(connection: sqlite3.Connection, handle: str) -> dict[str, Any] | None:
     """Expand one node by id, exact claim, or unambiguous claim fragment.
 
@@ -334,6 +385,9 @@ def dig(connection: sqlite3.Connection, handle: str) -> dict[str, Any] | None:
             (row["id"],),
         )
     ]
+    node["session_nodes"] = _session_neighbourhood(
+        connection, row["id"], row["source_session"]
+    )
     return node
 
 
@@ -363,7 +417,30 @@ def render_dig(node: dict[str, Any] | None, handle: str = "") -> str:
         lines.append(f"{edge['rel']}: {edge['to']}")
     if node["detail"]:
         lines.extend(["", node["detail"]])
+    lines.extend(render_session_neighbourhood(node.get("session_nodes")))
     return "\n".join(lines)
+
+
+def render_session_neighbourhood(neighbourhood: dict[str, Any] | None) -> list[str]:
+    """The session's other nodes, in order, with this one marked.
+
+    Rendered as claims rather than ids because `dig` accepts a claim: every line
+    here is one the agent can dig straight back in, so the block is a set of
+    moves and not just context.
+    """
+    if not neighbourhood:
+        return []
+
+    lines = ["", f"session wrote {neighbourhood['total']} nodes; "
+                 f"this is #{neighbourhood['position']}:"]
+    if neighbourhood["before_truncated"]:
+        lines.append("  ...")
+    for sibling in neighbourhood["nodes"]:
+        marker = "->" if sibling["current"] else "  "
+        lines.append(f"{marker}{sibling['claim']}")
+    if neighbourhood["after_truncated"]:
+        lines.append("  ...")
+    return lines
 
 
 def render_digs(nodes: list[tuple[str, dict[str, Any] | None]]) -> str:
