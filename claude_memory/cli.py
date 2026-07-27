@@ -224,10 +224,11 @@ def main(argv: list[str] | None = None) -> int:
 
         elif args.command == "t1":
             nodes = retrieval.assemble_t1(connection, scope=args.scope)
+            history = retrieval.session_history(connection, scope=args.scope)
             if args.render:
-                sys.stdout.write(retrieval.render_t1(nodes) + "\n")
+                sys.stdout.write(retrieval.render_t1(nodes, history) + "\n")
             else:
-                _emit(nodes)
+                _emit({"nodes": nodes, "history": history})
 
         elif args.command == "stale":
             store.set_stale(connection, args.title)

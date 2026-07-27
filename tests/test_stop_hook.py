@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
-from claude_memory import db, hooks
+from claude_memory import db, hooks, settings
 
 
 @pytest.fixture
@@ -57,21 +59,56 @@ def test_counters_are_independent_per_session(connection):
     assert hooks.build_stop_context(payload_b, connection) == ""
 
 
-def test_reminder_checks_findings_and_actions_separately_from_decisions(connection):
+def _reminder(connection, session_id="s1"):
+    payload = {"session_id": session_id}
+    for _ in range(hooks.MAINTAIN_EVERY - 1):
+        hooks.build_stop_context(payload, connection)
+    return hooks.build_stop_context(payload, connection)
+
+
+def test_reminder_refuses_to_collapse_into_one_holistic_question(connection):
     """Regression target for the actual bug this hook exists to catch: a
     holistic "anything worth capturing?" question let a real self-check answer
     "nothing new qualifies" while three sourced facts and two user actions sat
-    uncaptured, because it read as "has a decision been reached?" A checklist
-    that separates findings/actions from decisions is the fix under test."""
-    payload = {"session_id": "s1"}
-    for _ in range(hooks.MAINTAIN_EVERY - 1):
-        hooks.build_stop_context(payload, connection)
-    reminder = hooks.build_stop_context(payload, connection)
+    uncaptured, because it read as "has a decision been reached?"
 
-    assert "decision" in reminder.lower()
-    assert "finding" in reminder.lower() or "fact" in reminder.lower()
-    assert "action" in reminder.lower()
-    assert "does not need a decision" in reminder or "no decision" in reminder.lower()
+    The triggers themselves moved to meta.md (see the module comment in
+    hooks.py). What must stay here is the forcing function -- go one at a time,
+    and do not answer from whatever is most salient -- because that is the part
+    that has to arrive under task load."""
+    reminder = _reminder(connection).lower()
+
+    assert "one at a time" in reminder
+    assert "no decision yet" in reminder
+    assert "most salient" in reminder
+
+
+def test_meta_separates_findings_and_actions_from_decisions():
+    """The invariant the reminder used to carry, tested where it now lives."""
+    meta = settings.read("meta").lower()
+
+    assert "decision" in meta
+    assert "finding" in meta or "fact" in meta
+    assert "action" in meta
+    assert "does not need a decision" in meta
+
+
+def test_reminder_points_at_a_trigger_list_meta_actually_has(connection):
+    """Guards the delegation. The reminder names a count and a section instead
+    of restating the triggers, which is only safe while meta.md still has them
+    -- and meta.md is edited by hand, with nothing else to catch a silent
+    renumber or a dropped trigger. Change the count in one place and this fails.
+    """
+    meta = settings.read("meta")
+    reminder = _reminder(connection)
+
+    body = meta.lower().split("## writing", 1)
+    assert len(body) == 2, "meta.md lost the WRITING section the reminder points at"
+
+    triggers = re.findall(r"^(\d+)\. ", body[1], flags=re.MULTILINE)
+    assert [int(n) for n in triggers] == list(range(1, len(triggers) + 1)), triggers
+    assert len(triggers) == 6, f"meta.md has {len(triggers)} triggers"
+    assert "six triggers" in reminder.lower()
 
 
 def test_stop_hook_end_to_end_as_a_subprocess(tmp_path):

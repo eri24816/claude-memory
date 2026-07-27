@@ -67,11 +67,16 @@
   label { font-size: 0.75rem; color: var(--ink-faint); text-transform: uppercase; letter-spacing: 0.06em; }
 
   .scroll { overflow-x: auto; border: 1px solid var(--rule); border-radius: 6px; background: var(--surface); }
+  /* The list scrolls inside its own box rather than pushing the page down, so
+     the row count and the load button stay on screen instead of sitting two
+     hundred rows below the fold. */
+  #tab-nodes .scroll { max-height: 70vh; overflow-y: auto; }
   table { width: 100%; border-collapse: collapse; font-size: 0.84rem; }
   th {
     text-align: left; font-size: 0.68rem; text-transform: uppercase;
     letter-spacing: 0.08em; color: var(--ink-faint); font-weight: 600;
     padding: 0.6rem 0.8rem; border-bottom: 1px solid var(--rule); white-space: nowrap;
+    position: sticky; top: 0; z-index: 1; background: var(--surface);
   }
   td { padding: 0.55rem 0.8rem; border-bottom: 1px solid var(--rule-soft); vertical-align: top; }
   tr:last-child td { border-bottom: none; }
@@ -114,6 +119,14 @@
   .verdict { font-weight: 650; }
   .verdict.no { color: var(--hot); }
   .empty { padding: 2rem; text-align: center; color: var(--ink-faint); font-size: 0.86rem; }
+  .pagebar { display: flex; align-items: center; gap: 0.8rem; margin-top: 0.7rem; }
+  .pagebar button {
+    font: inherit; font-size: 0.82rem; padding: 0.35rem 0.8rem; cursor: pointer;
+    background: var(--surface); color: var(--ink);
+    border: 1px solid var(--rule); border-radius: 4px;
+  }
+  .pagebar button:hover { border-color: var(--cold); color: var(--cold); }
+  .pagebar button[hidden] { display: none; }
   .graph-layout { display: grid; grid-template-columns: minmax(0, 1fr) 19rem; gap: 1rem; }
   .graph-stage {
     position: relative; min-height: 620px; overflow: hidden;
@@ -193,6 +206,10 @@
       </tr></thead>
       <tbody id="nodes-body"></tbody>
     </table></div>
+    <div class="pagebar">
+      <span class="num muted" id="nodes-count"></span>
+      <button id="nodes-more" hidden>Load more</button>
+    </div>
   </section>
 
   <section id="tab-t1" hidden>
@@ -368,12 +385,28 @@ async function loadStats() {
   });
 }
 
-async function loadNodes() {
-  const rows = await get("/api/nodes", {
+// How many rows are on screen, which is also the offset of the next page. The
+// store outgrew one page long before anything said so: a node past the newest
+// 200 was absent from the tab with no sign it had been cut, so the tab read as
+// the whole store while showing a third of it.
+let nodesShown = 0;
+
+async function loadNodes(append = false) {
+  if (!append) nodesShown = 0;
+  const data = await get("/api/nodes", {
     type: $("f-type").value, scope: $("f-scope").value,
     about_user: $("f-about").value, state: $("f-state").value, q: $("f-q").value,
+    offset: nodesShown || "",
   });
-  $("nodes-body").innerHTML = rows.length ? rows.map((node) => `
+  const rows = data.nodes;
+  nodesShown += rows.length;
+  $("nodes-count").textContent = data.total
+    ? `showing ${nodesShown} of ${data.total}`
+    : "";
+  $("nodes-more").hidden = nodesShown >= data.total;
+  $("nodes-more").textContent = `Load ${Math.min(data.limit, data.total - nodesShown)} more`;
+
+  const html = rows.length ? rows.map((node) => `
     <tr class="expandable" data-id="${esc(node.id)}">
       <td><span class="chip ${esc(node.type)}">${esc(node.type)}</span></td>
       <td>${claimCell(node)}</td>
@@ -384,13 +417,23 @@ async function loadNodes() {
     </tr>
     <tr class="detail-row" data-for="${esc(node.id)}" hidden>
       <td colspan="6"><pre class="dig">loading…</pre></td>
-    </tr>`).join("") : `<tr><td colspan="6" class="empty">No nodes match these filters.</td></tr>`;
+    </tr>`).join("") : (append ? "" : `<tr><td colspan="6" class="empty">No nodes match these filters.</td></tr>`);
+  if (append) {
+    $("nodes-body").insertAdjacentHTML("beforeend", html);
+  } else {
+    $("nodes-body").innerHTML = html;
+  }
 
   // A click opens the dig, not the detail field. The point of this tab is to
   // show what a session would actually get, and `dig` is that: detail plus the
   // edges, the supersession chain, and the session's other nodes. Every row is
   // expandable now, because a node with no detail still has all of those.
-  $("nodes-body").querySelectorAll("tr.expandable").forEach((row) => {
+  //
+  // Only rows that have not been wired yet: an appended page leaves the earlier
+  // ones in place, and binding those a second time would toggle each open row
+  // shut again on the same click.
+  $("nodes-body").querySelectorAll("tr.expandable:not([data-bound])").forEach((row) => {
+    row.dataset.bound = "1";
     row.addEventListener("click", async () => {
       const panel = $("nodes-body").querySelector(`tr[data-for="${row.dataset.id}"]`);
       if (!panel) return;
@@ -412,7 +455,8 @@ async function loadNodes() {
 
 async function loadT1() {
   const data = await get("/api/t1", { scope: $("t1-scope").value });
-  $("t1-count").textContent = `${data.characters} chars · ${data.nodes.length} nodes`;
+  $("t1-count").textContent =
+    `${data.characters} chars · ${data.nodes.length} nodes · ${data.history.length} history`;
   const bar = $("t1-bar");
   const ratio = Math.min(1, data.characters / data.budget);
   bar.style.width = `${ratio * 100}%`;
@@ -521,8 +565,12 @@ document.querySelectorAll("nav button").forEach((button) => {
   });
 });
 
-["f-type", "f-scope", "f-about", "f-state"].forEach((id) => $(id).addEventListener("change", loadNodes));
-$("f-q").addEventListener("input", debounce(loadNodes));
+// `change` hands the listener an event, so the calls are wrapped: passing the
+// event straight through would arrive as a truthy `append` and stack the first
+// page on top of itself every time a filter changed.
+["f-type", "f-scope", "f-about", "f-state"].forEach((id) => $(id).addEventListener("change", () => loadNodes()));
+$("f-q").addEventListener("input", debounce(() => loadNodes()));
+$("nodes-more").addEventListener("click", () => loadNodes(true));
 $("t1-scope").addEventListener("change", loadT1);
 $("auto-msg").addEventListener("input", debounce(loadAuto, 300));
 $("auto-scope").addEventListener("change", loadAuto);
@@ -561,7 +609,7 @@ $("graph-stage").addEventListener("pointerup", () => {
   $("graph-stage").classList.remove("dragging");
 });
 
-loadStats().then(loadNodes);
+loadStats().then(() => loadNodes());
 </script>
 </body>
 </html>

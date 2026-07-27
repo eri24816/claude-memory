@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.3.1 — 2026-07-27
+
+- **The instructions are split by moment of use, each one owned in a single
+  place.** `meta.md`, the memory skill and the Stop reminder had grown into
+  three overlapping copies of the same guidance, and the copies had drifted.
+  `meta.md` now holds what memory is, how to read it including the row format,
+  and six enumerated capture triggers each naming its node type; the skill
+  holds construction mechanics only; the reminder holds the forcing function
+  alone and points at meta's triggers, dropping from ~1230 to 361 bytes per
+  firing. The reminder can reference meta because `SessionStart` has no
+  `matcher` and `session_start()` ignores `payload['source']`, so meta is
+  re-injected on startup, resume, clear and compact alike. `meta.md`'s WRITING
+  section was prose, which is the same holistic form the Stop hook was built to
+  correct — it is now a checklist, with the "nothing to write is normal" clause
+  out of final position. A test asserts meta still has six contiguous triggers,
+  because nothing else catches a hand edit that leaves the pointer dangling.
+
+- T1 ends with a **history block**: the last eight nodes written, oldest first,
+  any type but `raw`. The categorical sets say what is true about the user and
+  nothing says what was being worked on — a session's own output is spread
+  across types and mostly capped away by `recent_n`. Superseded nodes stay in
+  it with their `->` pointer, since the corrections are the best signal a
+  sequence of claims carries.
+- The inspector's Nodes tab pages. It fetched 200 rows and rendered them as if
+  they were the store, so with 629 nodes a node past the newest 200 was absent
+  with nothing on screen saying so — it read as "not in memory". `/api/nodes`
+  now returns `{nodes, total, offset, limit}`, the tab shows `showing N of M`
+  with a Load-more button, and the list scrolls in its own box so the count
+  stays on screen. Ordering breaks ties on `id`: a bulk ingest gives hundreds
+  of nodes the same `updated` second, and without a tiebreak a row could be
+  skipped by one page and repeated by the next.
+- `t1 --json` emits `{"nodes": ..., "history": ...}` rather than a bare list.
+
 ## 0.3.0 — 2026-07-26
 
 - One row format everywhere — `claim|when|+|-> correction`. T1, search, the

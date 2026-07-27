@@ -23,31 +23,30 @@ SCOPE_PREFIX = "project:"
 # rather than delegated to self-reporting.
 MAINTAIN_EVERY = 5
 
-# A single holistic question ("is anything worth capturing?") anchors on
-# whatever is most salient -- usually "has a decision been reached" -- and
-# silently drops everything else competing for attention. A checklist forces
-# each category to be considered on its own rather than folded into one
-# judgment call; that gap is exactly what let three sourced facts and two
-# capture-worthy user actions pass a real "nothing new qualifies" check.
+# The six capture triggers live in meta.md, NOT here. meta.md is re-injected by
+# the SessionStart hook on startup, resume, clear AND compact -- the settings.json
+# entry has no `matcher`, and session_start() never reads payload['source'] -- so
+# it is provably in context whenever this fires. Restating the triggers here was
+# duplication, and the two copies had already drifted apart.
+#
+# What does not survive is attention, which is the whole reason this hook exists.
+# A single holistic "is anything worth capturing?" anchors on whatever is most
+# salient -- usually "has a decision been reached" -- and silently drops
+# everything else competing for it. So this keeps the forcing function (go one at
+# a time, do not let one answer cover all) and drops the content.
+#
+# If capture rate falls after this change, restore the enumeration HERE and
+# delete it from meta.md instead. One of the two must own it, and this is the
+# fallback owner because it is the copy that fires under load.
 MAINTENANCE_REMINDER = (
-    "This is turn {count} since this session started. Before continuing, "
-    "check each of these separately -- do not let 'no decision yet' answer "
-    "for all of them:\n"
-    "1. A correction, stated preference, or change in Eric's situation.\n"
-    "2. A fact or finding you established through research or verification, "
-    "even with no decision reached -- a finding does not need a decision to "
-    "be worth saving.\n"
-    "3. A decision Eric actually made, with the reason it won.\n"
-    "4. A request from Eric that triggered real work (research, comparison, "
-    "verification) -- worth an action node of its own, separate from what "
-    "the work produced.\n"
-    "Note the two write paths: a stated preference, correction or convention is "
-    "an EDIT to settings/conv.md or settings/code.md -- consolidate it into what "
-    "is already there rather than appending a near-duplicate. Everything else is "
-    "`remember`.\n"
-    "If any of the four clears the bar, load the memory skill and write it "
-    "now. If none do, say so in one line and continue."
+    "This is turn {count} since this session started. Before continuing, walk "
+    "the six triggers in the WRITING section of your memory instructions one at "
+    "a time -- do not let 'no decision yet' answer for all of them, and do not "
+    "answer from whatever is most salient.\n"
+    "If any clears the bar, load the memory skill and write it now. If none do, "
+    "say so in one line and continue."
 )
+
 
 def scope_for_cwd(cwd: str | None) -> str:
     """Derive a stable project scope from a working directory.
@@ -84,11 +83,18 @@ def build_session_start_context(payload: dict, connection: sqlite3.Connection) -
     start itself is pure SQL, so it does not need the daemon for speed, but
     keeping this symmetric with build_user_prompt_context avoids two shapes
     for the same kind of thing.
+
+    Deliberately ignores payload['source']. The block renders identically for
+    startup, resume, clear and compact, which is what lets MAINTENANCE_REMINDER
+    and the memory skill both assume meta.md is in context.
     """
     from . import retrieval
 
     scope = scope_for_cwd(payload.get("cwd") or os.getcwd())
-    return retrieval.render_t1(retrieval.assemble_t1(connection, scope=scope))
+    return retrieval.render_t1(
+        retrieval.assemble_t1(connection, scope=scope),
+        retrieval.session_history(connection, scope=scope),
+    )
 
 
 def build_user_prompt_context(payload: dict, connection: sqlite3.Connection) -> str:
@@ -215,7 +221,7 @@ def user_prompt_submit() -> int:
 
 
 def stop() -> int:
-    """Force the every-N-turns memory check the meta node cannot rely on."""
+    """Force the every-N-turns memory check that meta.md alone does not produce."""
     payload = _read_payload()
 
     from . import db

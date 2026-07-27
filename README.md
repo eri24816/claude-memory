@@ -201,6 +201,7 @@ types.
 | `fact` | `about_user`, not yet ended, starting within `lead_time` |
 | `todo` | `about_user` and still open |
 | `idea`, `action`, `intention` | `about_user`, 3 most recent of each |
+| history | the last `history_n` nodes written, any type but `raw`, oldest first |
 
 ```sql
    (about_user AND type = 'fact'
@@ -223,6 +224,17 @@ be in context before the moment it applies.
 
 Measured on the reference store, this took autoload from 19,969 characters to 8,158 —
 and, more importantly, changed the growing term from ~684 characters per fact to ~67.
+
+**History is the one part of T1 that is a sequence rather than a set.** Everything above
+it is what currently holds; the history block is the last eight nodes written, in the
+order they were written, and it answers the question the categorical sets structurally
+cannot: not "what is true about the user" but "what were we doing". A session's own
+output is spread across types and mostly capped away by `recent_n`, so without it every
+session opens on the same standing facts and re-derives the thread of work from whatever
+the user happens to say first. Superseded nodes stay in it, carrying the `->` pointer:
+a history that hides its corrections hides its best signal. `raw` is excluded — one
+`ingest` writes hundreds of chunks in a pass, and a single wiki would be the whole
+history.
 
 A fact enters T1 once its window starts within `lead_time` (30 days) and stays until the
 window ends. The UMich enrolment autoloads from 2026-07-06 onward; a fact starting in
@@ -353,6 +365,7 @@ an embedding, and search requires embedding the query — neither is expressible
 | `remember(nodes)` | insert / supersede, batched |
 | `search(query, k, scope)` | hybrid RRF retrieval |
 | `assemble_t1(scope)` | the categorical T1 set |
+| `session_history(scope, n)` | the last n nodes written, oldest first |
 | `dig(handles...)` | expand nodes by id or claim, batched |
 | `sql(query)` | **read-only** escape hatch for the long tail |
 
@@ -488,6 +501,7 @@ the `superseded_by` clause.
 | `t1_budget` | autoload cap — a ceiling to alarm on, not a ranking input | 8,000 chars (~2k tokens) |
 | `lead_time` | how early a future-dated fact enters T1 | 30 days |
 | `recent_n` | per-type cap for idea / action / intention in T1 | 3 |
+| `history_n` | nodes in T1's history block | 8 |
 | `maintain_every` | turns between `Stop`-hook maintenance prompts | 5 |
 | `retrieval_floor` | minimum RRF score for per-message injection | open |
 | `N_redundant` | redundant hits before abstraction fires | open |

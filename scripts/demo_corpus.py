@@ -3,6 +3,7 @@
 import sys
 
 from claude_memory import assemble_t1, connect, render_t1, search
+from claude_memory.retrieval import session_history
 
 # The vault contains CJK; the Windows console defaults to cp1252.
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -17,7 +18,7 @@ QUERIES = [
 
 connection = connect()
 
-block = render_t1(assemble_t1(connection))
+block = render_t1(assemble_t1(connection), session_history(connection))
 print(f"T1: {len(block)} chars, {block.count(chr(10) + '- ')} entries\n")
 
 for query in QUERIES:

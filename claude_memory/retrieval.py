@@ -36,6 +36,10 @@ MAX_PER_SOURCE = 2
 LEAD_TIME_DAYS = 30
 RECENT_N = 3
 
+# How many recently written nodes T1 shows as history. Eight is enough to cover
+# the last session or two of work and short enough to read at a glance.
+HISTORY_N = 8
+
 # Trivial acknowledgements ("ok", "yes", "do it") yield 0-1 content words;
 # a real question like "what are my roommates called" yields 2. The boundary
 # sits at 2, not 3, or substantive short questions are silently skipped.
@@ -640,7 +644,50 @@ def assemble_t1(
     return [dict(row) for row in [*always_and_current, *recent]]
 
 
-def render_t1(nodes: list[dict[str, Any]]) -> str:
+def session_history(
+    connection: sqlite3.Connection,
+    scope: str | None = None,
+    limit: int = HISTORY_N,
+) -> list[dict[str, Any]]:
+    """The last nodes written, oldest first: what the store was just doing.
+
+    The categorical set answers "what is true about the user"; nothing in it
+    answers "what were we working on", because a session's own output is spread
+    across types and mostly capped away by `recent_n`. A session that opens
+    without it starts from the same standing facts every time and re-derives the
+    thread of work from whatever the user happens to say first.
+
+    Ordered by rowid, which is insertion order -- the sequence the sessions left
+    behind, not the sequence nodes were last edited into. `raw` is excluded:
+    ingest writes hundreds of chunks in one pass, and a single wiki would be the
+    entire history. Superseded nodes stay, carrying the `->` pointer to what
+    replaced them: a history that hides the corrections hides its best signal.
+    """
+    scopes = ["global"] + ([scope] if scope and scope != "global" else [])
+    scope_placeholders = ", ".join("?" * len(scopes))
+    rows = connection.execute(
+        f"""
+        SELECT id, claim, detail, type, scope, window_start, window_end,
+               superseded_by
+        FROM nodes
+        WHERE type != 'raw'
+          AND scope IN ({scope_placeholders})
+        ORDER BY rowid DESC
+        LIMIT ?
+        """,
+        (*scopes, limit),
+    ).fetchall()
+    history = []
+    for row in reversed(rows):
+        node = dict(row)
+        node["correction"] = newest_correction(connection, node["superseded_by"])
+        history.append(node)
+    return history
+
+
+def render_t1(
+    nodes: list[dict[str, Any]], history: list[dict[str, Any]] | None = None
+) -> str:
     """The autoload block injected at session start: prefs whole, nodes as claims.
 
     Two populations with opposite economics, so they are rendered by opposite
@@ -667,6 +714,14 @@ def render_t1(nodes: list[dict[str, Any]]) -> str:
         lines = [f"## {node_type}"]
         for node in by_type[node_type]:
             lines.append(f"- {render_row(node)}")
+        sections.append("\n".join(lines))
+
+    # Last, and labelled as a sequence rather than a set: everything above is
+    # what currently holds, and these are events in order, some of which the
+    # sections above have already superseded.
+    if history:
+        lines = [f"## history — the last {len(history)} nodes written, oldest first"]
+        lines.extend(f"- {render_row(node)}" for node in history)
         sections.append("\n".join(lines))
 
     if not sections:

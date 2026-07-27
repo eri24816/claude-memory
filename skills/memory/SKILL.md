@@ -5,15 +5,7 @@ description: Field schema and command reference for the claude-memory store. Loa
 
 # Memory — how to write
 
-The autoloaded block covers *when* to capture and how to read. This is the
-execution detail: schema, and how to change what is already stored.
-
-**Preferences do not live here.** A stated preference or correction is an edit to
-`settings/conv.md`; a coding convention is an edit to `settings/code.md` (see the
-`code-prefs` skill). `remember` rejects those types and names the file. They are
-files precisely so a new rule can be *merged into* an existing one — the node
-store can only append, which is how thirteen conv-prefs accumulated in four days
-with several restating each other.
+The autoloaded block covers *when* to capture and how to read. This is the execution detail: the schema, and how to change what is already stored. Assume the decision to capture has already been made.
 
 ## Write
 
@@ -51,71 +43,32 @@ python -m claude_memory remember --file nodes.json
 | `intention` | Someone wants to and may do something, not yet committed | when it was expressed |
 | `idea` | A thought or proposal. Never carries `about_user` | when it was thought |
 
-Disambiguation: names an action someone may take → `intention`. Decided or
-necessary → `todo`. Already happened → `action`. A concept or proposal → `idea`.
+Disambiguation: names an action someone may take → `intention`. Decided or necessary → `todo`. Already happened → `action`. A concept or proposal → `idea`.
 
 ### Writing a claim
 
-Think headline, not sentence. The eight words carry the distinguishing terms;
-everything else goes, or moves to `detail`.
+Think headline, not sentence. The eight words carry the distinguishing terms; everything else goes, or moves to `detail`.
 
 | Instead of | Write |
 |---|---|
 | "After arriving in Ann Arbor, Eric will apply for a Discovery credit card on 2026-08-06" | `Eric will apply for Discovery card` |
 | "The schtasks command fails with access denied when creating an ONLOGON trigger" | `schtasks ONLOGON trigger requires elevation` |
 
-### The row format
-
-Everything that lists nodes — T1, search, the per-message block, dig's session
-block — renders each one the same way:
-
-```
-claim|when|+|-> the claim that replaced it
-```
-
-`when` is the window: `mm-dd` inside the current year, `yy-mm-dd` outside it, and
-`start..end` when the two differ. `+` means the node carries detail the row does
-not show — dig before acting on such a row, because the eight words are a pointer
-and not the node. `-> …` means this claim has been superseded, and names the claim
-that currently stands rather than the immediate successor, which may itself have
-been corrected. Trailing empty fields are dropped, interior ones are not, so
-`A claim||+` is a node with detail and no window.
-
 ### One node, one statement
 
-**Split when the time fields differ.** A year-long lease and the single day
-someone moves in are two nodes, because one node carries one window — fuse them
-and neither window is true.
+**Split when the time fields differ.** A year-long lease and the single day someone moves in are two nodes, because one node carries one window — fuse them and neither window is true.
 
-Restraint is part of the schema. Writing nothing is a correct and common
-outcome; never invent a node to look useful. If what you are about to write is a
-near-duplicate of something stored, supersede that node instead of adding a
-second one — the store can append but never merge. Transient task state ("we are
-debugging the parser right now") and conversational trivia are not nodes at any
-granularity.
+Restraint is part of the schema. This is a constraint on *construction*, not a reason to skip a trigger: never invent a node to look useful, and never pad one node into three. If what you are about to write is a near-duplicate of something stored, supersede that node instead of adding a second one — the store can append but never merge.
 
-## Read
+### Before you write
 
-```bash
-python -m claude_memory search "<query>" "<another angle>"
-python -m claude_memory dig <id-or-claim> <another>
-```
-
-Both take several arguments in one call, and should be used that way: a tool call
-is billed for its cached prefix once, so one call with three queries costs a
-fraction of three calls.
-
-`dig` resolves an id, an exact claim, or an unambiguous claim fragment. If a
-fragment matches several nodes it says so and lists the ids — that is **not** "no
-match", and writing a new node in response would create a duplicate nothing can
-merge.
+`dig` resolves an id, an exact claim, or an unambiguous claim fragment. If a fragment matches several nodes it says so and lists the ids — that is **not** "no match", and writing a new node in response would create a duplicate nothing can merge. Dig your near-neighbours before adding.
 
 ## Changing what is stored
 
 Claims are immutable. There is no update path.
 
-**Reality changed** → supersede. The id is the handle and never moves, so the new
-node simply states what is true now:
+**Reality changed** → supersede. The id is the handle and never moves, so the new node simply states what is true now:
 
 ```json
 [{ "op": "supersede", "supersedes": "eric-s-apartment-is-2442-leslie-circle",
@@ -123,35 +76,22 @@ node simply states what is true now:
    "about_user": true, "window_start": "2027-08-01", "window_end": "2028-07-31" }]
 ```
 
-**No longer true, nothing replacing it** → `python -m claude_memory stale "<handle>"`.
-For an `intention`, only when the user says they no longer intend it — an
-intention nobody has acted on is still an intention, not a stale one.
+**No longer true, nothing replacing it** → `python -m claude_memory stale "<handle>"`. For an `intention`, only when Eric says he no longer intends it — an intention nobody has acted on is still an intention, not a stale one.
 
-**Only completion supersedes.** An `action` that finishes a `todo` supersedes it;
-climbing the earlier rungs does not, because an idea keeps its own validity after
-spawning an intention. Those are `motivates` edges, below.
+**Only completion supersedes.** An `action` that finishes a `todo` supersedes it; climbing the earlier rungs does not, because an idea keeps its own validity after spawning an intention. Those are `motivates` edges, below.
 
-**Supersede what you wrote earlier in this same session.** A working conversation
-reverses its own positions — something asserted at turn 12 and rejected by turn
-20 leaves both in the store unless the later turn supersedes the earlier. The
-`supersedes` handle resolves nodes from this session exactly like older ones.
+**Supersede what you wrote earlier in this same session.** A working conversation reverses its own positions — something asserted at turn 12 and rejected by turn 20 leaves both in the store unless the later turn supersedes the earlier. The `supersedes` handle resolves nodes from this session exactly like older ones.
 
-**You captured it wrong** → `remember` prints a `capture_run_id`;
-`python -m claude_memory rollback <id>` undoes that whole batch.
+**You captured it wrong** → `remember` prints a `capture_run_id`; `python -m claude_memory rollback <id>` undoes that whole batch.
 
-Never supersede an `idea` — it stays valid however much work it spawns. Link
-instead with an edge.
+Never supersede an `idea` — it stays valid however much work it spawns. Link instead with an edge.
 
 ## Edges
 
-Two `rel` values exist, and they mean different things. `dig` renders both
-directions — everything a node points at, and everything that points at it — so
-an edge is how a later agent sees why a node exists and what it connects to.
+Two `rel` values exist, and they mean different things.
 
-- **`motivates`** — the commitment ladder only, `idea → intention → todo`. Use it
-  exactly where you would otherwise supersede an idea, which is never allowed.
-- **`relates`** — everything else. A request that triggered research links to what
-  the research produced; two facts informing the same open question.
+- **`motivates`** — the commitment ladder only, `idea → intention → todo`. Use it exactly where you would otherwise supersede an idea, which is never allowed.
+- **`relates`** — everything else. A request that triggered research links to what the research produced; two facts informing the same open question.
 
 ```json
 [{ "claim": "Eric asked which US card to get", "type": "action",
@@ -159,27 +99,16 @@ an edge is how a later agent sees why a node exists and what it connects to.
    "edges": [{ "rel": "relates", "dst": "eric-is-leaning-toward-zolve" }] }]
 ```
 
-`dst` resolves like `supersedes`, including a node written earlier in the *same*
-batch. Both ends must exist; a `dst` naming nothing raises rather than writing a
-dangling edge.
+`dst` resolves like `supersedes`, including a node written earlier in the *same* batch. Both ends must exist; a `dst` naming nothing raises rather than writing a dangling edge.
 
-## Other commands
+## The preference files
 
-`where` resolved paths for the store and settings files ·
-`--type <type>` restrict a search · `--limit N` (default 10) ·
-`--scope project:<name>` · `--json` raw rows with BM25 and vector ranks ·
-`ingest <path>` heading-split markdown into `raw` chunks (`--dry-run` first).
+Routing is in the autoloaded block: a preference or convention is an edit to `settings/conv.md` or `settings/code.md`, not a node. `remember` rejects those types and names the file.
 
-`raw` is the one type you do not write by hand — `ingest` produces it. A raw row is a
-document section: its claim is the heading path, so it always carries `+` and always
-needs a dig. At most five reach any mixed search, so a wiki cannot crowd out the store.
-If you dig one and it says something worth keeping, write that as an ordinary typed node
-— do not supersede the chunk. Re-ingesting the file deletes and rewrites its chunks, so
-anything hung off one is lost; the typed claim stands on its own and survives.
+Mechanics: **merge, never append.** Find the rule that already covers the ground and rewrite it to include the new case; add a new bullet only when nothing there is about the same thing. These are files precisely so a rule can be merged; the node store can only append. After merging, the file should be no longer than before unless genuinely new ground was covered.
 
-## The background daemon
+## Raw chunks
 
-Per-message retrieval runs the embedding model on every substantive message.
-`python -m claude_memory daemon start` keeps it warm; `SessionStart` triggers
-this automatically, so you should not normally need to touch it. `daemon status`
-/ `daemon stop` exist for when retrieval feels slow.
+`python -m claude_memory where` prints the resolved paths for the store and the settings files.
+
+`raw` is the one type you do not write by hand — `ingest` produces it. A raw row is a document section: its claim is the heading path, so it always carries `+` and always needs a dig. If you dig one and it says something worth keeping, write that as an ordinary typed node — do not supersede the chunk. Re-ingesting the file deletes and rewrites its chunks, so anything hung off one is lost; the typed claim stands on its own and survives.

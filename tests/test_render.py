@@ -57,6 +57,69 @@ def test_editorial_comments_do_not_reach_context(connection):
     assert "TODO" not in block
 
 
+def test_history_is_the_last_nodes_written_oldest_first(connection):
+    """The categorical set says what is true about the user; nothing in it says
+    what was being worked on, and `recent_n` caps away most of a session's own
+    output."""
+    store.remember(connection, [
+        {"claim": "Eric asked about the inspector", "type": "action",
+         "about_user": True},
+        {"claim": "The nodes tab pages at 200", "type": "fact",
+         "about_user": False},
+    ])
+    history = retrieval.session_history(connection, limit=2)
+
+    assert [node["claim"] for node in history] == [
+        "Eric asked about the inspector",
+        "The nodes tab pages at 200",
+    ]
+
+
+def test_history_carries_corrections_rather_than_hiding_them(connection):
+    """A history that drops the superseded node drops the correction with it,
+    which is the most useful thing a sequence of claims can show."""
+    store.remember(connection, [{
+        "op": "supersede", "supersedes": "eric-moves-in-and-collects-keys",
+        "claim": "Eric moved in a day late", "type": "action",
+        "about_user": True, "window_start": "2026-08-06",
+    }])
+    block = retrieval.render_t1(
+        retrieval.assemble_t1(connection),
+        retrieval.session_history(connection),
+    )
+
+    assert (
+        "Eric moves in and collects keys|08-05||-> Eric moved in a day late"
+        in block
+    )
+
+
+def test_history_excludes_ingested_chunks(connection):
+    """One `ingest` writes hundreds of chunks in a single pass, so a wiki would
+    otherwise be the entire history of the store."""
+    store.remember(connection, [
+        {"claim": "wiki.md#Cards#First card", "type": "raw",
+         "detail": "Open a secured card first.", "origin": "derived",
+         "about_user": None},
+    ])
+    history = retrieval.session_history(connection)
+
+    assert all(node["type"] != "raw" for node in history)
+    assert history[-1]["claim"] == "Eric moves in and collects keys"
+
+
+def test_history_is_labelled_as_a_sequence_and_comes_last(connection):
+    """Everything above it is what currently holds; these are events in order,
+    some already superseded by the sections above."""
+    block = retrieval.render_t1(
+        retrieval.assemble_t1(connection),
+        retrieval.session_history(connection),
+    )
+
+    assert block.index("## fact") < block.index("## history")
+    assert "oldest first" in block
+
+
 def test_context_rows_use_the_standard_row_format(connection):
     """claim|window|detail|-> correction, the same shape T1 and dig use."""
     hits = retrieval.search(connection, "apartment Leslie", limit=1)

@@ -131,7 +131,16 @@ def nodes(
     state: str = "all",
     q: str | None = None,
     limit: int = 200,
-) -> list[dict[str, Any]]:
+    offset: int = 0,
+) -> dict[str, Any]:
+    """One page of nodes, with the total the page was cut from.
+
+    The store passed 600 nodes while this returned a bare list capped at 200,
+    so a node written outside the newest 200 was simply absent from the tab with
+    nothing on screen saying so -- it read as "not in memory" rather than "not on
+    this page". `total` is what the page count is drawn from, and is the count
+    after filtering, not of the table.
+    """
     clauses: list[str] = []
     params: list[Any] = []
 
@@ -157,16 +166,19 @@ def nodes(
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     connection = _connection()
     try:
+        total = connection.execute(
+            f"SELECT COUNT(*) AS total FROM nodes {where}", params
+        ).fetchone()["total"]
         rows = connection.execute(
             f"""
             SELECT id, claim, detail, type, about_user, scope,
                    window_start, window_end, stale, superseded_by, origin,
                    parent, source_session, updated
             FROM nodes {where}
-            ORDER BY updated DESC
-            LIMIT ?
+            ORDER BY updated DESC, id DESC
+            LIMIT ? OFFSET ?
             """,
-            (*params, limit),
+            (*params, limit, offset),
         ).fetchall()
         nodes = []
         for row in rows:
@@ -177,7 +189,11 @@ def nodes(
                 connection, node["superseded_by"]
             )
             nodes.append(node)
-        return nodes
+        # `id` breaks ties on `updated`, which a bulk ingest gives hundreds of
+        # nodes to the second: without it SQLite may order a tie differently
+        # between two queries, and a row can be skipped by one page and repeated
+        # by the next.
+        return {"nodes": nodes, "total": total, "offset": offset, "limit": limit}
     finally:
         connection.close()
 
@@ -224,9 +240,11 @@ def t1(scope: str | None = None) -> dict[str, Any]:
     connection = _connection()
     try:
         selected = retrieval.assemble_t1(connection, scope=scope)
-        block = retrieval.render_t1(selected)
+        history = retrieval.session_history(connection, scope=scope)
+        block = retrieval.render_t1(selected, history)
         return {
             "nodes": selected,
+            "history": history,
             "block": block,
             "characters": len(block),
             "budget": 8000,
